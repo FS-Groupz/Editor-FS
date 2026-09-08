@@ -6,6 +6,11 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag, e.g. v2.4.9"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -18,6 +23,88 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve & Validate Release Target
+        id: release_target
+        run: |
+          EVENT_NAME="${{ github.event_name }}"
+          REF="${{ github.ref }}"
+          IS_RELEASE="false"
+          RELEASE_TAG=""
+
+          if [ "$EVENT_NAME" = "push" ] && [[ "$REF" == refs/tags/v* ]]; then
+            IS_RELEASE="true"
+            RELEASE_TAG="${{ github.ref_name }}"
+            echo "Triggered by Git tag push: $RELEASE_TAG"
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            RAW_TAG="${{ github.event.inputs.release_tag }}"
+            RELEASE_TAG=$(echo "$RAW_TAG" | tr -d '[:space:]')
+            if [ -n "$RELEASE_TAG" ]; then
+              IS_RELEASE="true"
+              echo "Triggered by manual workflow_dispatch with requested tag: $RELEASE_TAG"
+            fi
+          else
+            echo "CI build triggered by $EVENT_NAME on $REF (non-release build)."
+          fi
+
+          if [ "$IS_RELEASE" = "true" ]; then
+            # 1. Validate Tag Format (must be v<major>.<minor>.<patch>)
+            if ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(\+[0-9]+)?$ ]]; then
+              echo "::error::MALFORMED TAG: Release tag '$RELEASE_TAG' is invalid. Must match 'v<major>.<minor>.<patch>' (e.g. v2.4.9)."
+              exit 1
+            fi
+
+            # 2. Extract and Validate pubspec.yaml Version Consistency
+            if [ ! -f pubspec.yaml ]; then
+              echo "::error::pubspec.yaml not found."
+              exit 1
+            fi
+
+            PUBSPEC_RAW=$(grep -E '^version:[[:space:]]*' pubspec.yaml | head -n 1 | sed -E 's/^version:[[:space:]]*//' | tr -d '\r\n"')
+            PUBSPEC_SEMVER="${PUBSPEC_RAW%%+*}"
+            EXPECTED_TAG="v${PUBSPEC_SEMVER}"
+
+            echo "Detected pubspec.yaml version: $PUBSPEC_RAW (semantic: $PUBSPEC_SEMVER)"
+            echo "Expected release tag: $EXPECTED_TAG"
+            echo "Requested release tag: $RELEASE_TAG"
+
+            if [ "$RELEASE_TAG" != "$EXPECTED_TAG" ]; then
+              echo "::error::VERSION MISMATCH: Requested release tag '$RELEASE_TAG' does not match pubspec.yaml version '$PUBSPEC_RAW' (expected '$EXPECTED_TAG'). Update pubspec.yaml before releasing."
+              exit 1
+            fi
+
+            # 3. Duplicate Protection: Check if GitHub Release already exists
+            echo "Checking if a GitHub Release already exists for $RELEASE_TAG..."
+            if gh release view "$RELEASE_TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+              echo "::error::DUPLICATE RELEASE: A GitHub Release for tag '$RELEASE_TAG' already exists in ${{ github.repository }}. Overwriting or recreating releases is strictly forbidden."
+              exit 1
+            fi
+
+            # 4. Duplicate Protection: On manual workflow_dispatch, check if Git tag already exists on remote
+            if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+              echo "Checking if Git tag $RELEASE_TAG already exists on remote origin..."
+              if git ls-remote --tags origin "refs/tags/$RELEASE_TAG" | grep -q "refs/tags/$RELEASE_TAG"; then
+                echo "::error::DUPLICATE TAG: Git tag '$RELEASE_TAG' already exists in repository. Overwriting existing tags is strictly forbidden."
+                exit 1
+              fi
+            fi
+
+            echo "Release validation SUCCESS for $RELEASE_TAG."
+            echo "IS_RELEASE=true" >> $GITHUB_ENV
+            echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
+            echo "is_release=true" >> $GITHUB_OUTPUT
+            echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
+          else
+            echo "IS_RELEASE=false" >> $GITHUB_ENV
+            echo "RELEASE_TAG=" >> $GITHUB_ENV
+            echo "is_release=false" >> $GITHUB_OUTPUT
+            echo "release_tag=" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -147,10 +234,12 @@ jobs:
           path: build/app/outputs/flutter-apk/app-release.apk
 
       - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: steps.release_target.outputs.is_release == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          name: MAHMAS Studio ${{ github.ref_name }}
+          tag_name: ${{ steps.release_target.outputs.release_tag }}
+          target_commitish: ${{ github.sha }}
+          name: MAHMAS Studio ${{ steps.release_target.outputs.release_tag }}
           files: |
             build/app/outputs/flutter-apk/app-release.apk
           draft: false
