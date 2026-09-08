@@ -21,6 +21,7 @@ import 'package:capcut_video_editor/domain/models/overlay_clip.dart';
 import 'package:capcut_video_editor/domain/models/project.dart';
 import 'package:capcut_video_editor/domain/models/sticker_item.dart';
 import 'package:capcut_video_editor/domain/models/text_overlay.dart';
+import 'package:capcut_video_editor/domain/models/clip_spatial_transform.dart';
 import 'package:capcut_video_editor/domain/models/video_clip.dart';
 import 'package:capcut_video_editor/domain/models/video_effect.dart';
 import 'package:capcut_video_editor/core/services/project_storage_service.dart';
@@ -1561,6 +1562,154 @@ class EditorViewModel extends ChangeNotifier {
     _videoClips[_selectedClipIndex!] = clip.copyWith(isFrozen: !clip.isFrozen);
     notifyListeners();
   }
+
+  // --- Spatial Transformations (Free Transform Canvas Phase 1) ---
+
+  int _findClipIndexById(String clipId) {
+    return _videoClips.indexWhere((clip) => clip.id == clipId);
+  }
+
+  /// Updates horizontal (xPos) and vertical (yPos) position offset for a clip.
+  void updateClipPosition(String clipId, double xPos, double yPos, {bool recordUndo = true}) {
+    final index = _findClipIndexById(clipId);
+    if (index == -1) return;
+    final clip = _videoClips[index];
+    final sanitizedX = ClipSpatialTransform.sanitizePosition(xPos, fallback: clip.xPos);
+    final sanitizedY = ClipSpatialTransform.sanitizePosition(yPos, fallback: clip.yPos);
+    if (clip.xPos == sanitizedX && clip.yPos == sanitizedY) return;
+
+    if (recordUndo) _saveSnapshot();
+    _videoClips[index] = clip.copyWith(xPos: sanitizedX, yPos: sanitizedY);
+    notifyListeners();
+  }
+
+  /// Updates uniform spatial scale factor for a clip, clamped to [0.05, 20.0].
+  void updateClipScale(String clipId, double scale, {bool recordUndo = true}) {
+    final index = _findClipIndexById(clipId);
+    if (index == -1) return;
+    final clip = _videoClips[index];
+    final sanitizedScale = ClipSpatialTransform.sanitizeScale(scale, fallback: clip.scale);
+    if (clip.scale == sanitizedScale) return;
+
+    if (recordUndo) _saveSnapshot();
+    _videoClips[index] = clip.copyWith(scale: sanitizedScale);
+    notifyListeners();
+  }
+
+  /// Updates continuous spatial rotation angle in radians for a clip.
+  void updateClipRotation(String clipId, double rotationAngle, {bool recordUndo = true}) {
+    final index = _findClipIndexById(clipId);
+    if (index == -1) return;
+    final clip = _videoClips[index];
+    final sanitizedRotation = ClipSpatialTransform.sanitizeRotation(rotationAngle, fallback: clip.rotationAngle);
+    if (clip.rotationAngle == sanitizedRotation) return;
+
+    if (recordUndo) _saveSnapshot();
+    _videoClips[index] = clip.copyWith(rotationAngle: sanitizedRotation);
+    notifyListeners();
+  }
+
+  /// Atomically updates spatial position, scale, and rotation in a single mutation.
+  void updateClipTransform(
+    String clipId, {
+    double? xPos,
+    double? yPos,
+    double? scale,
+    double? rotationAngle,
+    bool recordUndo = true,
+  }) {
+    final index = _findClipIndexById(clipId);
+    if (index == -1) return;
+    final clip = _videoClips[index];
+    final sanitizedX = xPos != null ? ClipSpatialTransform.sanitizePosition(xPos, fallback: clip.xPos) : clip.xPos;
+    final sanitizedY = yPos != null ? ClipSpatialTransform.sanitizePosition(yPos, fallback: clip.yPos) : clip.yPos;
+    final sanitizedScale = scale != null ? ClipSpatialTransform.sanitizeScale(scale, fallback: clip.scale) : clip.scale;
+    final sanitizedRotation = rotationAngle != null ? ClipSpatialTransform.sanitizeRotation(rotationAngle, fallback: clip.rotationAngle) : clip.rotationAngle;
+
+    if (clip.xPos == sanitizedX &&
+        clip.yPos == sanitizedY &&
+        clip.scale == sanitizedScale &&
+        clip.rotationAngle == sanitizedRotation) {
+      return;
+    }
+
+    if (recordUndo) _saveSnapshot();
+    _videoClips[index] = clip.copyWith(
+      xPos: sanitizedX,
+      yPos: sanitizedY,
+      scale: sanitizedScale,
+      rotationAngle: sanitizedRotation,
+    );
+    notifyListeners();
+  }
+
+  /// Resets clip spatial transform to canonical defaults (x=0, y=0, scale=1, rot=0).
+  void resetClipTransform(String clipId, {bool recordUndo = true}) {
+    final index = _findClipIndexById(clipId);
+    if (index == -1) return;
+    final clip = _videoClips[index];
+    if (clip.xPos == 0.0 && clip.yPos == 0.0 && clip.scale == 1.0 && clip.rotationAngle == 0.0) {
+      return;
+    }
+
+    if (recordUndo) _saveSnapshot();
+    _videoClips[index] = clip.copyWith(
+      xPos: 0.0,
+      yPos: 0.0,
+      scale: 1.0,
+      rotationAngle: 0.0,
+    );
+    notifyListeners();
+  }
+
+  /// Updates position of currently selected clip.
+  void updateSelectedClipPosition(double xPos, double yPos, {bool recordUndo = true}) {
+    if (selectedClip != null) {
+      updateClipPosition(selectedClip!.id, xPos, yPos, recordUndo: recordUndo);
+    }
+  }
+
+  /// Updates scale of currently selected clip.
+  void updateSelectedClipScale(double scale, {bool recordUndo = true}) {
+    if (selectedClip != null) {
+      updateClipScale(selectedClip!.id, scale, recordUndo: recordUndo);
+    }
+  }
+
+  /// Updates rotation in radians of currently selected clip.
+  void updateSelectedClipRotation(double rotationAngle, {bool recordUndo = true}) {
+    if (selectedClip != null) {
+      updateClipRotation(selectedClip!.id, rotationAngle, recordUndo: recordUndo);
+    }
+  }
+
+  /// Atomically updates transform of currently selected clip.
+  void updateSelectedClipTransform({
+    double? xPos,
+    double? yPos,
+    double? scale,
+    double? rotationAngle,
+    bool recordUndo = true,
+  }) {
+    if (selectedClip != null) {
+      updateClipTransform(
+        selectedClip!.id,
+        xPos: xPos,
+        yPos: yPos,
+        scale: scale,
+        rotationAngle: rotationAngle,
+        recordUndo: recordUndo,
+      );
+    }
+  }
+
+  /// Resets transform of currently selected clip.
+  void resetSelectedClipTransform({bool recordUndo = true}) {
+    if (selectedClip != null) {
+      resetClipTransform(selectedClip!.id, recordUndo: recordUndo);
+    }
+  }
+
 
   void replaceSelectedClip({
     required String assetId,

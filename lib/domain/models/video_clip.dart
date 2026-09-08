@@ -22,6 +22,19 @@ class VideoClip {
   final List<Color> previewGradient;
   final IconData previewIcon;
 
+  /// Spatial transformation properties (Free Transform Canvas)
+  /// Horizontal position offset relative to canvas center (default 0.0)
+  final double xPos;
+
+  /// Vertical position offset relative to canvas center (default 0.0)
+  final double yPos;
+
+  /// Uniform spatial scale factor (default 1.0, positive value)
+  final double scale;
+
+  /// Spatial rotation angle in radians (default 0.0)
+  final double rotationAngle;
+
   const VideoClip({
     required this.id,
     required this.assetId,
@@ -39,6 +52,10 @@ class VideoClip {
     this.isFrozen = false,
     required this.previewGradient,
     this.previewIcon = Icons.movie_creation_outlined,
+    this.xPos = 0.0,
+    this.yPos = 0.0,
+    this.scale = 1.0,
+    this.rotationAngle = 0.0,
   });
 
   /// Effective duration on the timeline after trimming and speed adjustment
@@ -68,6 +85,10 @@ class VideoClip {
     bool? isFrozen,
     List<Color>? previewGradient,
     IconData? previewIcon,
+    double? xPos,
+    double? yPos,
+    double? scale,
+    double? rotationAngle,
   }) {
     return VideoClip(
       id: id ?? this.id,
@@ -86,6 +107,10 @@ class VideoClip {
       isFrozen: isFrozen ?? this.isFrozen,
       previewGradient: previewGradient ?? this.previewGradient,
       previewIcon: previewIcon ?? this.previewIcon,
+      xPos: xPos ?? this.xPos,
+      yPos: yPos ?? this.yPos,
+      scale: scale ?? this.scale,
+      rotationAngle: rotationAngle ?? this.rotationAngle,
     );
   }
 
@@ -105,6 +130,10 @@ class VideoClip {
       'flipVertical': flipVertical,
       'isReversed': isReversed,
       'isFrozen': isFrozen,
+      'xPos': xPos,
+      'yPos': yPos,
+      'scale': scale,
+      'rotationAngle': rotationAngle,
     };
   }
 
@@ -125,6 +154,10 @@ class VideoClip {
       isReversed: json['isReversed'] as bool? ?? false,
       isFrozen: json['isFrozen'] as bool? ?? false,
       previewGradient: const [Color(0xFF141E30), Color(0xFF243B55)],
+      xPos: (json['xPos'] as num?)?.toDouble() ?? 0.0,
+      yPos: (json['yPos'] as num?)?.toDouble() ?? 0.0,
+      scale: (json['scale'] as num?)?.toDouble() ?? 1.0,
+      rotationAngle: (json['rotationAngle'] as num?)?.toDouble() ?? 0.0,
     );
   }
 
@@ -145,7 +178,11 @@ class VideoClip {
           flipHorizontal == other.flipHorizontal &&
           flipVertical == other.flipVertical &&
           isReversed == other.isReversed &&
-          isFrozen == other.isFrozen;
+          isFrozen == other.isFrozen &&
+          xPos == other.xPos &&
+          yPos == other.yPos &&
+          scale == other.scale &&
+          rotationAngle == other.rotationAngle;
 
   @override
   int get hashCode =>
@@ -161,5 +198,12 @@ class VideoClip {
       flipHorizontal.hashCode ^
       flipVertical.hashCode ^
       isReversed.hashCode ^
-      isFrozen.hashCode;
+      isFrozen.hashCode ^
+      xPos.hashCode ^
+      yPos.hashCode ^
+      scale.hashCode ^
+      rotationAngle.hashCode;
 }
+
+/// Canonical alias for VideoClip to satisfy MediaClip domain naming
+typedef MediaClip = VideoClip;
