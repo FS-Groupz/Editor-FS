@@ -153,16 +153,18 @@ class AssetDownloadService {
       if (!finalFile.existsSync() || finalFile.lengthSync() == 0) {
         throw Exception('Downloaded file is empty or missing from disk');
       }
+      final fileLength = finalFile.lengthSync();
 
       // Register with persistent storage service
       await AssetStorageService.instance.saveDownloadedAsset(asset, targetPath);
 
+      final finalLength = finalFile.existsSync() ? finalFile.lengthSync() : fileLength;
       _updateProgress(DownloadProgress(
         assetId: assetId,
         state: DownloadState.downloaded,
         progress: 1.0,
-        bytesDownloaded: finalFile.lengthSync(),
-        totalBytes: finalFile.lengthSync(),
+        bytesDownloaded: finalLength,
+        totalBytes: finalLength,
       ));
 
       debugPrint('[AssetDownloadService] Successfully downloaded and registered $assetId at $targetPath');

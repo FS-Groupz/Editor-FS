@@ -2236,9 +2236,24 @@ void main() {
 
       // ONLINE SOUND EFFECTS & ASSET STORE TESTS
       group('Online Sound Effects & Asset Store Tests', () {
+        late Directory tempDir;
         late RemoteAssetRepository remoteRepo;
         late AssetDownloadService downloadService;
         late AssetStorageService storageService;
+
+        setUpAll(() {
+          tempDir = Directory.systemTemp.createTempSync('editor_vm_sfx_test_');
+          AssetStorageService.instance.setAssetStorageDirectoryForTesting(tempDir.path);
+        });
+
+        tearDownAll(() {
+          AssetStorageService.instance.setAssetStorageDirectoryForTesting(null);
+          try {
+            if (tempDir.existsSync()) {
+              tempDir.deleteSync(recursive: true);
+            }
+          } catch (_) {}
+        });
 
         setUp(() async {
           remoteRepo = RemoteAssetRepository();

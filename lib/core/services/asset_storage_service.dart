@@ -17,6 +17,14 @@ class AssetStorageService {
 
   bool get isInitialized => _isInitialized;
 
+  /// Sets a custom storage directory path for isolated unit testing
+  @visibleForTesting
+  void setAssetStorageDirectoryForTesting(String? path) {
+    _cachedAssetDir = path;
+    _isInitialized = false;
+    _registry.clear();
+  }
+
   /// Retrieves the root directory for permanent asset storage
   Future<String> getAssetStorageDirectory() async {
     if (_cachedAssetDir != null) return _cachedAssetDir!;
@@ -33,7 +41,9 @@ class AssetStorageService {
       basePath = Directory.systemTemp.path;
     }
 
-    final assetDir = Directory('$basePath/asset_library');
+    final isTemp = basePath == Directory.systemTemp.path;
+    final folderName = isTemp ? 'asset_library_$pid' : 'asset_library';
+    final assetDir = Directory('$basePath/$folderName');
     if (!assetDir.existsSync()) {
       try {
         assetDir.createSync(recursive: true);

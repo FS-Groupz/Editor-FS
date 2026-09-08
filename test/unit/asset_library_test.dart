@@ -14,10 +14,25 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('Online Asset Library & Downloadable Store Tests', () {
+    late Directory tempTestDir;
     late RemoteAssetRepository remoteRepo;
     late AssetStorageService storageService;
     late AssetDownloadService downloadService;
     late AssetLibraryService libraryService;
+
+    setUpAll(() async {
+      tempTestDir = Directory.systemTemp.createTempSync('asset_lib_test_');
+      AssetStorageService.instance.setAssetStorageDirectoryForTesting(tempTestDir.path);
+    });
+
+    tearDownAll(() async {
+      AssetStorageService.instance.setAssetStorageDirectoryForTesting(null);
+      try {
+        if (tempTestDir.existsSync()) {
+          tempTestDir.deleteSync(recursive: true);
+        }
+      } catch (_) {}
+    });
 
     setUp(() async {
       remoteRepo = RemoteAssetRepository();
