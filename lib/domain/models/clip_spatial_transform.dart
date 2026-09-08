@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+import 'package:flutter/material.dart';
 import 'package:capcut_video_editor/domain/models/video_clip.dart';
 
 /// Immutable domain model representing the spatial transformation state
@@ -87,6 +89,24 @@ class ClipSpatialTransform {
       scale: scale,
       rotationAngle: rotationAngle,
     );
+  }
+
+  /// Computes the Flutter Matrix4 representation for this spatial transform,
+  /// seamlessly composing continuous spatial transform with legacy step rotation
+  /// and horizontal/vertical flips.
+  Matrix4 toMatrix4({
+    int legacyRotationDegrees = 0,
+    bool flipHorizontal = false,
+    bool flipVertical = false,
+  }) {
+    final totalRotation = (legacyRotationDegrees * math.pi / 180.0) + rotationAngle;
+    final scaleX = (flipHorizontal ? -1.0 : 1.0) * scale;
+    final scaleY = (flipVertical ? -1.0 : 1.0) * scale;
+
+    return Matrix4.identity()
+      ..translateByDouble(xPos, yPos, 0.0, 1.0)
+      ..rotateZ(totalRotation)
+      ..scaleByDouble(scaleX, scaleY, 1.0, 1.0);
   }
 
   Map<String, dynamic> toJson() {

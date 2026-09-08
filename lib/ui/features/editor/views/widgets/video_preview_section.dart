@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -14,7 +13,9 @@ import 'package:capcut_video_editor/domain/models/video_clip.dart';
 import 'package:capcut_video_editor/domain/enums/transition_type.dart';
 import 'package:capcut_video_editor/domain/models/video_effect.dart';
 import 'package:capcut_video_editor/core/services/video_playback_service.dart';
+import 'package:capcut_video_editor/domain/models/clip_spatial_transform.dart';
 import 'package:capcut_video_editor/ui/features/editor/view_models/editor_view_model.dart';
+import 'package:capcut_video_editor/ui/features/editor/views/widgets/interactive_transform_canvas.dart';
 
 /// Top Video Preview Screen containing the live video canvas, aspect-ratio viewport,
 /// color grading LUT filters, adjustments, Picture-in-Picture (PIP) layers,
@@ -221,24 +222,33 @@ class _VideoPreviewSectionState extends State<VideoPreviewSection> {
 
                     // 5. Tap to Play / Pause Gesture Overlay
                     GestureDetector(
-                      behavior: HitTestBehavior.translucent,
-                      onTap: viewModel.togglePlayPause,
+                      behavior: (viewModel.selectedClipId != null)
+                          ? HitTestBehavior.deferToChild
+                          : HitTestBehavior.translucent,
+                      onTap: (viewModel.selectedClipId != null) ? null : viewModel.togglePlayPause,
                       child: AnimatedOpacity(
                         opacity: viewModel.isPlaying ? 0.0 : 1.0,
                         duration: const Duration(milliseconds: 200),
                         child: Center(
-                          child: Container(
-                            width: 56,
-                            height: 56,
-                            decoration: BoxDecoration(
-                              color: Colors.black.withValues(alpha: 0.55),
-                              shape: BoxShape.circle,
-                              border: Border.all(color: Colors.white.withValues(alpha: 0.3)),
-                            ),
-                            child: const Icon(
-                              Icons.play_arrow_rounded,
-                              size: 36,
-                              color: Colors.white,
+                          child: IgnorePointer(
+                            ignoring: viewModel.isPlaying,
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onTap: viewModel.togglePlayPause,
+                              child: Container(
+                                width: 56,
+                                height: 56,
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withValues(alpha: 0.55),
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: Colors.white.withValues(alpha: 0.3)),
+                                ),
+                                child: const Icon(
+                                  Icons.play_arrow_rounded,
+                                  size: 36,
+                                  color: Colors.white,
+                                ),
+                              ),
                             ),
                           ),
                         ),
@@ -600,18 +610,16 @@ class _VideoPreviewSectionState extends State<VideoPreviewSection> {
       canvasChild = _buildPlaceholderGraphic(clip);
     }
 
+    final transform = ClipSpatialTransform.fromClip(clip);
     return Opacity(
       opacity: clip.opacity,
       child: Transform(
         alignment: Alignment.center,
-        transform: Matrix4.identity()
-          ..rotateZ(clip.rotationDegrees * math.pi / 180)
-          ..scaleByDouble(
-            clip.flipHorizontal ? -1.0 : 1.0,
-            clip.flipVertical ? -1.0 : 1.0,
-            1.0,
-            1.0,
-          ),
+        transform: transform.toMatrix4(
+          legacyRotationDegrees: clip.rotationDegrees,
+          flipHorizontal: clip.flipHorizontal,
+          flipVertical: clip.flipVertical,
+        ),
         child: canvasChild,
       ),
     );
@@ -730,39 +738,47 @@ class _VideoPreviewSectionState extends State<VideoPreviewSection> {
       canvasChild = _buildPlaceholderGraphic(activeClip);
     }
 
-    Widget videoContent = Opacity(
+    Widget visualChild = Opacity(
       opacity: activeClip.opacity,
-      child: Transform(
-        alignment: Alignment.center,
-        transform: Matrix4.identity()
-          ..rotateZ(activeClip.rotationDegrees * math.pi / 180)
-          ..scaleByDouble(
-            activeClip.flipHorizontal ? -1.0 : 1.0,
-            activeClip.flipVertical ? -1.0 : 1.0,
-            1.0,
-            1.0,
-          ),
-        child: canvasChild,
-      ),
+      child: canvasChild,
     );
 
     // Apply color filter LUT & adjustments
     if (filter != null) {
-      videoContent = ColorFiltered(colorFilter: filter, child: videoContent);
+      visualChild = ColorFiltered(colorFilter: filter, child: visualChild);
     }
     if (adjustments != null) {
-      videoContent = ColorFiltered(colorFilter: adjustments, child: videoContent);
+      visualChild = ColorFiltered(colorFilter: adjustments, child: visualChild);
     }
 
     if (viewModel.canvasBlurSigma > 0.0) {
-      videoContent = ImageFiltered(
+      visualChild = ImageFiltered(
         imageFilter: ui.ImageFilter.blur(
           sigmaX: viewModel.canvasBlurSigma,
           sigmaY: viewModel.canvasBlurSigma,
         ),
-        child: videoContent,
+        child: visualChild,
       );
     }
+
+    final isSelected = activeClip is VideoClip && activeClip.id == viewModel.selectedClipId;
+
+    Widget videoContent = activeClip is VideoClip
+        ? InteractiveTransformCanvas(
+            clip: activeClip,
+            isSelected: isSelected,
+            viewModel: viewModel,
+            child: visualChild,
+          )
+        : Transform(
+            alignment: Alignment.center,
+            transform: ClipSpatialTransform.fromClip(activeClip).toMatrix4(
+              legacyRotationDegrees: activeClip.rotationDegrees,
+              flipHorizontal: activeClip.flipHorizontal,
+              flipVertical: activeClip.flipVertical,
+            ),
+            child: visualChild,
+          );
 
     return videoContent;
   }

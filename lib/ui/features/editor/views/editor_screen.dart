@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:capcut_video_editor/core/constants/app_colors.dart';
 import 'package:capcut_video_editor/core/services/audio_playback_service.dart';
 import 'package:capcut_video_editor/core/services/video_playback_service.dart';
@@ -92,62 +93,64 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
 
   @override
   Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: _viewModel,
-      builder: (context, _) {
-        final activeDrawer = _viewModel.activeDrawer;
+    return ProviderScope(
+      child: ListenableBuilder(
+        listenable: _viewModel,
+        builder: (context, _) {
+          final activeDrawer = _viewModel.activeDrawer;
 
-        return Scaffold(
-          backgroundColor: AppColors.background,
-          body: SafeArea(
-            bottom: false,
-            child: Column(
-              children: [
-                // 1. Top Navigation Bar
-                TopNavigationBar(viewModel: _viewModel),
+          return Scaffold(
+            backgroundColor: AppColors.background,
+            body: SafeArea(
+              bottom: false,
+              child: Column(
+                children: [
+                  // 1. Top Navigation Bar
+                  TopNavigationBar(viewModel: _viewModel),
 
-                // 2. Video Preview Screen at top (Flexible/Responsive)
-                Expanded(
-                  flex: 5,
-                  child: VideoPreviewSection(viewModel: _viewModel),
-                ),
+                  // 2. Video Preview Screen at top (Flexible/Responsive)
+                  Expanded(
+                    flex: 5,
+                    child: VideoPreviewSection(viewModel: _viewModel),
+                  ),
 
-                // 3. Action Toolbar in between (Split, Trim, Delete, Export)
-                ActionToolbar(viewModel: _viewModel),
+                  // 3. Action Toolbar in between (Split, Trim, Delete, Export)
+                  ActionToolbar(viewModel: _viewModel),
 
-                // 4. Timeline Track at bottom (Scrollable tracks, ruler, playhead)
-                Expanded(
-                  flex: 4,
-                  child: TimelineSection(viewModel: _viewModel),
-                ),
+                  // 4. Timeline Track at bottom (Scrollable tracks, ruler, playhead)
+                  Expanded(
+                    flex: 4,
+                    child: TimelineSection(viewModel: _viewModel),
+                  ),
 
-                // 5. Signature Bottom Category Selector or Active Drawer Panel
-                AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 220),
-                  transitionBuilder: (child, animation) {
-                    return SlideTransition(
-                      position: Tween<Offset>(
-                        begin: const Offset(0, 0.2),
-                        end: Offset.zero,
-                      ).animate(animation),
-                      child: FadeTransition(opacity: animation, child: child),
-                    );
-                  },
-                  child: activeDrawer != null
-                      ? KeyedSubtree(
-                          key: ValueKey('drawer_${activeDrawer.name}'),
-                          child: _buildActiveDrawer(activeDrawer),
-                        )
-                      : KeyedSubtree(
-                          key: const ValueKey('bottom_selector'),
-                          child: BottomToolSelector(viewModel: _viewModel),
-                        ),
-                ),
-              ],
+                  // 5. Signature Bottom Category Selector or Active Drawer Panel
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 220),
+                    transitionBuilder: (child, animation) {
+                      return SlideTransition(
+                        position: Tween<Offset>(
+                          begin: const Offset(0, 0.2),
+                          end: Offset.zero,
+                        ).animate(animation),
+                        child: FadeTransition(opacity: animation, child: child),
+                      );
+                    },
+                    child: activeDrawer != null
+                        ? KeyedSubtree(
+                            key: ValueKey('drawer_${activeDrawer.name}'),
+                            child: _buildActiveDrawer(activeDrawer),
+                          )
+                        : KeyedSubtree(
+                            key: const ValueKey('bottom_selector'),
+                            child: BottomToolSelector(viewModel: _viewModel),
+                          ),
+                  ),
+                ],
+              ),
             ),
-          ),
-        );
-      },
+          );
+        },
+      ),
     );
   }
 }

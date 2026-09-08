@@ -292,6 +292,8 @@ class EditorViewModel extends ChangeNotifier {
           ? _videoClips[_selectedClipIndex!]
           : null;
 
+  String? get selectedClipId => selectedClip?.id;
+
   OverlayClip? get selectedOverlay =>
       (_selectedOverlayIndex != null && _selectedOverlayIndex! >= 0 && _selectedOverlayIndex! < _overlayClips.length)
           ? _overlayClips[_selectedOverlayIndex!]
