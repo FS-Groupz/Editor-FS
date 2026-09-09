@@ -341,6 +341,10 @@ class DeviceMediaService {
         'rotationDegrees': clip.rotationDegrees,
         'flipHorizontal': clip.flipHorizontal,
         'flipVertical': clip.flipVertical,
+        'xPos': clip.xPos,
+        'yPos': clip.yPos,
+        'scale': clip.scale,
+        'rotationAngle': clip.rotationAngle,
       });
     }
 

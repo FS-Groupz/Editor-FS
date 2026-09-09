@@ -35,7 +35,11 @@ data class ExportClip(
     val volume: Double,
     val rotationDegrees: Int,
     val flipHorizontal: Boolean,
-    val flipVertical: Boolean
+    val flipVertical: Boolean,
+    val xPos: Double = 0.0,
+    val yPos: Double = 0.0,
+    val scale: Double = 1.0,
+    val rotationAngle: Double = 0.0
 ) {
     val activeDurationMs: Long
         get() {
@@ -43,6 +47,18 @@ data class ExportClip(
             val sp = if (speed > 0.0) speed else 1.0
             return (trimmed / sp).toLong()
         }
+
+    val safeScale: Double
+        get() = if (!scale.isFinite() || scale <= 0.0) 1.0 else scale.coerceIn(0.05, 20.0)
+
+    val safeXPos: Double
+        get() = if (!xPos.isFinite()) 0.0 else xPos
+
+    val safeYPos: Double
+        get() = if (!yPos.isFinite()) 0.0 else yPos
+
+    val safeRotationAngle: Double
+        get() = if (!rotationAngle.isFinite()) 0.0 else rotationAngle
 }
 
 data class ExportTransition(
@@ -633,6 +649,27 @@ class VideoExportEngine(private val context: Context) {
         width: Int,
         height: Int
     ) {
+        val centerX = width / 2f
+        val centerY = height / 2f
+
+        // Kcanvas is the uniform ratio between export canvas dimensions and preview reference canvas (width: 360)
+        val kCanvas = width.toFloat() / 360f
+        val xExport = clip.safeXPos.toFloat() * kCanvas
+        val yExport = clip.safeYPos.toFloat() * kCanvas
+
+        val s = clip.safeScale.toFloat()
+        val scaleX = (if (clip.flipHorizontal) -1f else 1f) * s
+        val scaleY = (if (clip.flipVertical) -1f else 1f) * s
+
+        val continuousDeg = (clip.safeRotationAngle.toFloat() * 180f / Math.PI.toFloat())
+        val totalRotationDeg = clip.rotationDegrees.toFloat() + continuousDeg
+
+        canvas.save()
+        canvas.translate(centerX + xExport, centerY + yExport)
+        canvas.rotate(totalRotationDeg)
+        canvas.scale(scaleX, scaleY)
+        canvas.translate(-centerX, -centerY)
+
         if (frame != null && !frame.isRecycled) {
             val srcRect = Rect(0, 0, frame.width, frame.height)
             val frameRatio = frame.width.toFloat() / frame.height.toFloat()
@@ -649,18 +686,7 @@ class VideoExportEngine(private val context: Context) {
                 dstRect = Rect(left, 0, left + drawW, height)
             }
 
-            canvas.save()
-            if (clip.rotationDegrees != 0 || clip.flipHorizontal || clip.flipVertical) {
-                canvas.rotate(clip.rotationDegrees.toFloat(), width / 2f, height / 2f)
-                canvas.scale(
-                    if (clip.flipHorizontal) -1f else 1f,
-                    if (clip.flipVertical) -1f else 1f,
-                    width / 2f,
-                    height / 2f
-                )
-            }
             canvas.drawBitmap(frame, srcRect, dstRect, null)
-            canvas.restore()
         } else {
             // Draw placeholder vibrant graphic
             val paint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -679,6 +705,7 @@ class VideoExportEngine(private val context: Context) {
             paint.textAlign = Paint.Align.CENTER
             canvas.drawText(clip.title, width / 2f, height / 2f, paint)
         }
+        canvas.restore()
     }
 
     /**

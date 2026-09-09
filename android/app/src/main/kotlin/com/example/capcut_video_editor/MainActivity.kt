@@ -1166,7 +1166,11 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
                 volume = (map["volume"] as? Number)?.toDouble() ?: 1.0,
                 rotationDegrees = (map["rotationDegrees"] as? Number)?.toInt() ?: 0,
                 flipHorizontal = map["flipHorizontal"] as? Boolean ?: false,
-                flipVertical = map["flipVertical"] as? Boolean ?: false
+                flipVertical = map["flipVertical"] as? Boolean ?: false,
+                xPos = (map["xPos"] as? Number)?.toDouble() ?: 0.0,
+                yPos = (map["yPos"] as? Number)?.toDouble() ?: 0.0,
+                scale = (map["scale"] as? Number)?.toDouble() ?: 1.0,
+                rotationAngle = (map["rotationAngle"] as? Number)?.toDouble() ?: 0.0
             )
         }
 
