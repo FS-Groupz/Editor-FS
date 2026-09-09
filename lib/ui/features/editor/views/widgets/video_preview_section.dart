@@ -765,6 +765,7 @@ class _VideoPreviewSectionState extends State<VideoPreviewSection> {
 
     Widget videoContent = activeClip is VideoClip
         ? InteractiveTransformCanvas(
+            key: ValueKey('clip_canvas_${activeClip.id}'),
             clip: activeClip,
             isSelected: isSelected,
             viewModel: viewModel,

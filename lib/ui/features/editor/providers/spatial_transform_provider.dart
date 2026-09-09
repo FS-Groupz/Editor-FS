@@ -31,9 +31,9 @@ class SpatialTransformMapNotifier extends Notifier<Map<String, ClipSpatialTransf
     state = newMap;
   }
 
-  /// Retrieves spatial transform for a given clip ID or returns canonical defaults.
-  ClipSpatialTransform getTransform(String clipId) {
-    return state[clipId] ?? ClipSpatialTransform(clipId: clipId);
+  /// Retrieves spatial transform for a given clip ID, with optional fallback or canonical defaults.
+  ClipSpatialTransform getTransform(String clipId, [ClipSpatialTransform? fallback]) {
+    return state[clipId] ?? fallback ?? ClipSpatialTransform(clipId: clipId);
   }
 
   /// Updates horizontal (xPos) and vertical (yPos) position of the specified clip.
@@ -105,6 +105,21 @@ class SpatialTransformMapNotifier extends Notifier<Map<String, ClipSpatialTransf
 
   /// Alias for resetTransform matching requirements.
   void reset(String clipId) => resetTransform(clipId);
+
+  /// Clears the transient transform for a specific clip ID from the map.
+  void clearTransform(String clipId) {
+    if (state.containsKey(clipId)) {
+      final updated = Map<String, ClipSpatialTransform>.from(state)..remove(clipId);
+      state = updated;
+    }
+  }
+
+  /// Clears all transient transforms from the map.
+  void clearAll() {
+    if (state.isNotEmpty) {
+      state = const {};
+    }
+  }
 }
 
 // ============================================================================
@@ -117,7 +132,7 @@ final spatialTransformMapProvider =
   SpatialTransformMapNotifier.new,
 );
 
-/// Isolated family provider for watching a single clip's spatial transform.
+/// Isolated family provider for watching a single clip's spatial transform by ID.
 ///
 /// Uses `.select` internally so that a widget watching a specific `clipId` ONLY
 /// rebuilds when that exact clip's transform is mutated. High-frequency pan/scale
@@ -127,6 +142,22 @@ final clipSpatialTransformProvider =
   return ref.watch(spatialTransformMapProvider.select(
     (map) => map[clipId] ?? ClipSpatialTransform(clipId: clipId),
   ));
+});
+
+/// Isolated family provider for watching a clip's spatial transform derived purely from domain state.
+///
+/// Pure derivation flow:
+/// VideoClip spatial state -> initial provider state -> widget reads provider state.
+///
+/// If a transient transform exists in [spatialTransformMapProvider] (during interactive pan/pinch/rotate gestures),
+/// it returns that high-frequency transform. Otherwise, it derives directly and purely from [clip]
+/// without any build-time mutations, side-effects, or race conditions.
+final clipSpatialTransformFromClipProvider =
+    Provider.family<ClipSpatialTransform, VideoClip>((ref, clip) {
+  final transient = ref.watch(spatialTransformMapProvider.select(
+    (map) => map[clip.id],
+  ));
+  return transient ?? ClipSpatialTransform.fromClip(clip);
 });
 
 /// Per-clip spatial transform controller providing targeted mutation methods for a specific clip.

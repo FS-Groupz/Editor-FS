@@ -72,38 +72,21 @@ class _InteractiveTransformCanvasContentState extends ConsumerState<_Interactive
   bool _isInteracting = false;
 
   @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        ref.read(spatialTransformMapProvider.notifier).registerClip(widget.clip);
-      }
-    });
-  }
-
-  @override
   void didUpdateWidget(covariant _InteractiveTransformCanvasContent oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // If the clip's spatial attributes were updated externally (e.g. undo, redo, reset, project load)
-    if (oldWidget.clip.id == widget.clip.id &&
-        (oldWidget.clip.xPos != widget.clip.xPos ||
-            oldWidget.clip.yPos != widget.clip.yPos ||
-            oldWidget.clip.scale != widget.clip.scale ||
-            oldWidget.clip.rotationAngle != widget.clip.rotationAngle)) {
-      ref.read(spatialTransformMapProvider.notifier).updateTransform(
-            widget.clip.id,
-            xPos: widget.clip.xPos,
-            yPos: widget.clip.yPos,
-            scale: widget.clip.scale,
-            rotationAngle: widget.clip.rotationAngle,
-          );
+    // If the active clip identity changed while interacting, reset interaction flag
+    if (oldWidget.clip.id != widget.clip.id && _isInteracting) {
+      _isInteracting = false;
     }
   }
 
   void _onScaleStart(ScaleStartDetails details) {
     if (!widget.isSelected) return;
 
-    final current = ref.read(spatialTransformMapProvider.notifier).getTransform(widget.clip.id);
+    final current = ref.read(spatialTransformMapProvider.notifier).getTransform(
+          widget.clip.id,
+          ClipSpatialTransform.fromClip(widget.clip),
+        );
     _startInitialX = current.xPos;
     _startInitialY = current.yPos;
     _startInitialScale = current.scale;
@@ -152,7 +135,10 @@ class _InteractiveTransformCanvasContentState extends ConsumerState<_Interactive
     if (!_isInteracting) return;
     _isInteracting = false;
 
-    final finalTransform = ref.read(spatialTransformMapProvider.notifier).getTransform(widget.clip.id);
+    final finalTransform = ref.read(spatialTransformMapProvider.notifier).getTransform(
+          widget.clip.id,
+          ClipSpatialTransform.fromClip(widget.clip),
+        );
 
     // Only commit an undo snapshot if spatial transform actually changed
     final hasChanged = finalTransform.xPos != _startInitialX ||
@@ -170,24 +156,15 @@ class _InteractiveTransformCanvasContentState extends ConsumerState<_Interactive
         recordUndo: true,
       );
     }
+
+    // Clean up transient entry so domain VideoClip in ViewModel remains authoritative single source of truth
+    ref.read(spatialTransformMapProvider.notifier).clearTransform(widget.clip.id);
   }
 
   @override
   Widget build(BuildContext context) {
-    // Selectively watch only this clip's spatial transform
-    final watchedTransform = ref.watch(clipSpatialTransformProvider(widget.clip.id));
-
-    // Seamless fallback to domain clip state if not yet registered in Riverpod map
-    final effectiveTransform = (watchedTransform.xPos == 0.0 &&
-            watchedTransform.yPos == 0.0 &&
-            watchedTransform.scale == 1.0 &&
-            watchedTransform.rotationAngle == 0.0 &&
-            (widget.clip.xPos != 0.0 ||
-                widget.clip.yPos != 0.0 ||
-                widget.clip.scale != 1.0 ||
-                widget.clip.rotationAngle != 0.0))
-        ? ClipSpatialTransform.fromClip(widget.clip)
-        : watchedTransform;
+    // Pure derivation: VideoClip spatial state -> initial provider state -> widget reads provider state
+    final effectiveTransform = ref.watch(clipSpatialTransformFromClipProvider(widget.clip));
 
     final matrix = effectiveTransform.toMatrix4(
       legacyRotationDegrees: widget.clip.rotationDegrees,
