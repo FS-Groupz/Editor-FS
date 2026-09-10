@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:capcut_video_editor/domain/models/video_clip.dart';
+import 'package:capcut_video_editor/domain/models/transform_snap_engine.dart';
 
 /// Immutable domain model representing the spatial transformation state
 /// of an individual media clip on the interactive canvas.
@@ -27,10 +28,16 @@ class ClipSpatialTransform {
   static const double maxScale = 20.0;
 
   /// Distance threshold in logical pixels below which clip center auto-snaps to canvas center (0.0)
-  static const double centerSnapThreshold = 10.0;
+  static const double centerSnapThreshold = TransformSnapConfig.centerSnapThreshold;
 
   /// Distance threshold in logical pixels above which clip center breaks free from center snap
-  static const double centerReleaseThreshold = 14.0;
+  static const double centerReleaseThreshold = TransformSnapConfig.centerReleaseThreshold;
+
+  /// Distance threshold in logical pixels below which clip edge auto-snaps to canvas edge
+  static const double edgeSnapThreshold = TransformSnapConfig.edgeSnapThreshold;
+
+  /// Distance threshold in logical pixels above which clip edge breaks free from edge snap
+  static const double edgeReleaseThreshold = TransformSnapConfig.edgeReleaseThreshold;
 
   /// Computes updated snap state and effective coordinate for a single axis with hysteresis.
   /// Returns a record: (effectiveCoordinate, isSnapped).

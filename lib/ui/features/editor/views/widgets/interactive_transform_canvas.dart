@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:capcut_video_editor/domain/models/clip_spatial_transform.dart';
 import 'package:capcut_video_editor/domain/models/video_clip.dart';
+import 'package:capcut_video_editor/domain/models/transform_snap_engine.dart';
 import 'package:capcut_video_editor/ui/features/editor/providers/spatial_transform_provider.dart';
 import 'package:capcut_video_editor/ui/features/editor/view_models/editor_view_model.dart';
 
@@ -71,9 +72,10 @@ class _InteractiveTransformCanvasContentState extends ConsumerState<_Interactive
   Offset _startFocalPoint = Offset.zero;
   bool _isInteracting = false;
 
-  // Snapping state flags for active gesture
-  bool _isSnappedX = false;
-  bool _isSnappedY = false;
+  // Snapping state targets for active gesture
+  SnapTargetX _snapTargetX = SnapTargetX.none;
+  SnapTargetY _snapTargetY = SnapTargetY.none;
+  Size _lastCanvasSize = const Size(360, 360);
 
   @override
   void didUpdateWidget(covariant _InteractiveTransformCanvasContent oldWidget) {
@@ -81,8 +83,8 @@ class _InteractiveTransformCanvasContentState extends ConsumerState<_Interactive
     // If the active clip identity changed while interacting, reset interaction flag
     if (oldWidget.clip.id != widget.clip.id && _isInteracting) {
       _isInteracting = false;
-      _isSnappedX = false;
-      _isSnappedY = false;
+      _snapTargetX = SnapTargetX.none;
+      _snapTargetY = SnapTargetY.none;
     }
   }
 
@@ -100,9 +102,21 @@ class _InteractiveTransformCanvasContentState extends ConsumerState<_Interactive
     _startFocalPoint = details.localFocalPoint;
     _isInteracting = true;
 
-    // Initialize snap state based on current baseline proximity to center
-    _isSnappedX = _startInitialX.abs() <= ClipSpatialTransform.centerSnapThreshold;
-    _isSnappedY = _startInitialY.abs() <= ClipSpatialTransform.centerSnapThreshold;
+    // Evaluate initial snap state based on baseline transform
+    final initialSnap = TransformSnapEngine.evaluateSnap(
+      rawX: _startInitialX,
+      rawY: _startInitialY,
+      scale: _startInitialScale,
+      rotationAngle: _startInitialRotation,
+      canvasSize: _lastCanvasSize,
+      legacyRotationDegrees: widget.clip.rotationDegrees,
+      flipHorizontal: widget.clip.flipHorizontal,
+      flipVertical: widget.clip.flipVertical,
+      currentSnapX: SnapTargetX.none,
+      currentSnapY: SnapTargetY.none,
+    );
+    _snapTargetX = initialSnap.snapTargetX;
+    _snapTargetY = initialSnap.snapTargetY;
   }
 
   void _onScaleUpdate(ScaleUpdateDetails details) {
@@ -119,23 +133,6 @@ class _InteractiveTransformCanvasContentState extends ConsumerState<_Interactive
       fallback: _startInitialY,
     );
 
-    // Apply auto-snap with hysteresis independently for X and Y axes
-    final (snappedX, newSnappedX) = ClipSpatialTransform.calculateCenterSnap(
-      rawCoordinate: rawX,
-      currentlySnapped: _isSnappedX,
-    );
-    final (snappedY, newSnappedY) = ClipSpatialTransform.calculateCenterSnap(
-      rawCoordinate: rawY,
-      currentlySnapped: _isSnappedY,
-    );
-
-    if (_isSnappedX != newSnappedX || _isSnappedY != newSnappedY) {
-      setState(() {
-        _isSnappedX = newSnappedX;
-        _isSnappedY = newSnappedY;
-      });
-    }
-
     // 2. Uniform scale factor relative to baseline
     final newScale = ClipSpatialTransform.sanitizeScale(
       _startInitialScale * details.scale,
@@ -148,11 +145,32 @@ class _InteractiveTransformCanvasContentState extends ConsumerState<_Interactive
       fallback: _startInitialRotation,
     );
 
+    // Apply auto-snap with rotated bounds & hysteresis independently for X and Y axes
+    final snapResult = TransformSnapEngine.evaluateSnap(
+      rawX: rawX,
+      rawY: rawY,
+      scale: newScale,
+      rotationAngle: newRotation,
+      canvasSize: _lastCanvasSize,
+      legacyRotationDegrees: widget.clip.rotationDegrees,
+      flipHorizontal: widget.clip.flipHorizontal,
+      flipVertical: widget.clip.flipVertical,
+      currentSnapX: _snapTargetX,
+      currentSnapY: _snapTargetY,
+    );
+
+    if (_snapTargetX != snapResult.snapTargetX || _snapTargetY != snapResult.snapTargetY) {
+      setState(() {
+        _snapTargetX = snapResult.snapTargetX;
+        _snapTargetY = snapResult.snapTargetY;
+      });
+    }
+
     // High-frequency atomic update into Riverpod without full-tree rebuilds
     ref.read(spatialTransformMapProvider.notifier).updateTransform(
           widget.clip.id,
-          xPos: snappedX,
-          yPos: snappedY,
+          xPos: snapResult.effectiveX,
+          yPos: snapResult.effectiveY,
           scale: newScale,
           rotationAngle: newRotation,
         );
@@ -162,10 +180,10 @@ class _InteractiveTransformCanvasContentState extends ConsumerState<_Interactive
     if (!_isInteracting) return;
     _isInteracting = false;
 
-    if (_isSnappedX || _isSnappedY) {
+    if (_snapTargetX != SnapTargetX.none || _snapTargetY != SnapTargetY.none) {
       setState(() {
-        _isSnappedX = false;
-        _isSnappedY = false;
+        _snapTargetX = SnapTargetX.none;
+        _snapTargetY = SnapTargetY.none;
       });
     }
 
@@ -206,101 +224,112 @@ class _InteractiveTransformCanvasContentState extends ConsumerState<_Interactive
       flipVertical: widget.clip.flipVertical,
     );
 
-    return Stack(
-      fit: StackFit.passthrough,
-      children: [
-        // 1. Gesture detector + Transformed media clip
-        GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onScaleStart: widget.isSelected ? _onScaleStart : null,
-          onScaleUpdate: widget.isSelected ? _onScaleUpdate : null,
-          onScaleEnd: widget.isSelected ? _onScaleEnd : null,
-          onTap: () {
-            if (!widget.isSelected) {
-              final idx = widget.viewModel.videoClips.indexWhere((c) => c.id == widget.clip.id);
-              if (idx != -1) widget.viewModel.selectClip(idx);
-            }
-          },
-          child: Transform(
-            alignment: Alignment.center,
-            transform: matrix,
-            child: Stack(
-              clipBehavior: Clip.none,
-              fit: StackFit.passthrough,
-              children: [
-                // 1a. Media surface content
-                widget.child,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.hasBoundedWidth && constraints.hasBoundedHeight) {
+          _lastCanvasSize = Size(constraints.maxWidth, constraints.maxHeight);
+        }
 
-                // 1b. Active cyan bounding box
-                if (widget.isSelected)
-                  Positioned.fill(
-                    child: IgnorePointer(
-                      child: Container(
-                        decoration: BoxDecoration(
-                          border: Border.all(
-                            color: const Color(0xFF00E5FF),
-                            width: 1.5,
+        final showGuides = _isInteracting &&
+            (_snapTargetX != SnapTargetX.none || _snapTargetY != SnapTargetY.none);
+
+        return Stack(
+          fit: StackFit.passthrough,
+          children: [
+            // 1. Gesture detector + Transformed media clip
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onScaleStart: widget.isSelected ? _onScaleStart : null,
+              onScaleUpdate: widget.isSelected ? _onScaleUpdate : null,
+              onScaleEnd: widget.isSelected ? _onScaleEnd : null,
+              onTap: () {
+                if (!widget.isSelected) {
+                  final idx = widget.viewModel.videoClips.indexWhere((c) => c.id == widget.clip.id);
+                  if (idx != -1) widget.viewModel.selectClip(idx);
+                }
+              },
+              child: Transform(
+                alignment: Alignment.center,
+                transform: matrix,
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  fit: StackFit.passthrough,
+                  children: [
+                    // 1a. Media surface content
+                    widget.child,
+
+                    // 1b. Active cyan bounding box
+                    if (widget.isSelected)
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: Container(
+                            decoration: BoxDecoration(
+                              border: Border.all(
+                                color: const Color(0xFF00E5FF),
+                                width: 1.5,
+                              ),
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                  ),
 
-                // 1c. Small cyan control dot/handle
-                if (widget.isSelected)
-                  Positioned(
-                    top: -6,
-                    right: -6,
-                    child: IgnorePointer(
-                      child: Container(
-                        width: 12,
-                        height: 12,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF00E5FF),
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Colors.white, width: 1.5),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.5),
-                              blurRadius: 4,
-                              offset: const Offset(0, 1),
+                    // 1c. Small cyan control dot/handle
+                    if (widget.isSelected)
+                      Positioned(
+                        top: -6,
+                        right: -6,
+                        child: IgnorePointer(
+                          child: Container(
+                            width: 12,
+                            height: 12,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF00E5FF),
+                              shape: BoxShape.circle,
+                              border: Border.all(color: Colors.white, width: 1.5),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.5),
+                                  blurRadius: 4,
+                                  offset: const Offset(0, 1),
+                                ),
+                              ],
                             ),
-                          ],
+                          ),
                         ),
                       ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        ),
-
-        // 2. Un-transformed Center Alignment Guides (Only displayed during active gesture snapping)
-        if (_isInteracting && (_isSnappedX || _isSnappedY))
-          Positioned.fill(
-            child: IgnorePointer(
-              child: CustomPaint(
-                painter: _CenterAlignmentGuidesPainter(
-                  showVerticalGuide: _isSnappedX,
-                  showHorizontalGuide: _isSnappedY,
+                  ],
                 ),
               ),
             ),
-          ),
-      ],
+
+            // 2. Un-transformed Center & Edge Alignment Guides (Only displayed during active gesture snapping)
+            if (showGuides)
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: CustomPaint(
+                    painter: TransformAlignmentGuidesPainter(
+                      snapTargetX: _snapTargetX,
+                      snapTargetY: _snapTargetY,
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
     );
   }
 }
 
-/// Custom painter for thin, subtle cyan center alignment guides.
+/// Custom painter for thin, subtle cyan center and edge alignment guides.
 /// Spans the entire canvas without undergoing the media clip's affine transform.
-class _CenterAlignmentGuidesPainter extends CustomPainter {
-  final bool showVerticalGuide;
-  final bool showHorizontalGuide;
+class TransformAlignmentGuidesPainter extends CustomPainter {
+  final SnapTargetX snapTargetX;
+  final SnapTargetY snapTargetY;
 
-  const _CenterAlignmentGuidesPainter({
-    required this.showVerticalGuide,
-    required this.showHorizontalGuide,
+  const TransformAlignmentGuidesPainter({
+    required this.snapTargetX,
+    required this.snapTargetY,
   });
 
   @override
@@ -318,22 +347,54 @@ class _CenterAlignmentGuidesPainter extends CustomPainter {
       ..strokeWidth = 1.0
       ..style = PaintingStyle.stroke;
 
-    if (showVerticalGuide) {
-      // Vertical guide line across full canvas height at x = width / 2
-      canvas.drawLine(Offset(centerX, 0), Offset(centerX, size.height), glowPaint);
-      canvas.drawLine(Offset(centerX, 0), Offset(centerX, size.height), corePaint);
+    // Vertical guides: Center X, Left Edge (x=0), Right Edge (x=size.width)
+    double? guideX;
+    switch (snapTargetX) {
+      case SnapTargetX.centerX:
+        guideX = centerX;
+        break;
+      case SnapTargetX.leftEdge:
+        guideX = 0.0;
+        break;
+      case SnapTargetX.rightEdge:
+        guideX = size.width;
+        break;
+      case SnapTargetX.none:
+        guideX = null;
+        break;
     }
 
-    if (showHorizontalGuide) {
-      // Horizontal guide line across full canvas width at y = height / 2
-      canvas.drawLine(Offset(0, centerY), Offset(size.width, centerY), glowPaint);
-      canvas.drawLine(Offset(0, centerY), Offset(size.width, centerY), corePaint);
+    if (guideX != null) {
+      canvas.drawLine(Offset(guideX, 0), Offset(guideX, size.height), glowPaint);
+      canvas.drawLine(Offset(guideX, 0), Offset(guideX, size.height), corePaint);
+    }
+
+    // Horizontal guides: Center Y, Top Edge (y=0), Bottom Edge (y=size.height)
+    double? guideY;
+    switch (snapTargetY) {
+      case SnapTargetY.centerY:
+        guideY = centerY;
+        break;
+      case SnapTargetY.topEdge:
+        guideY = 0.0;
+        break;
+      case SnapTargetY.bottomEdge:
+        guideY = size.height;
+        break;
+      case SnapTargetY.none:
+        guideY = null;
+        break;
+    }
+
+    if (guideY != null) {
+      canvas.drawLine(Offset(0, guideY), Offset(size.width, guideY), glowPaint);
+      canvas.drawLine(Offset(0, guideY), Offset(size.width, guideY), corePaint);
     }
   }
 
   @override
-  bool shouldRepaint(covariant _CenterAlignmentGuidesPainter oldDelegate) {
-    return oldDelegate.showVerticalGuide != showVerticalGuide ||
-        oldDelegate.showHorizontalGuide != showHorizontalGuide;
+  bool shouldRepaint(covariant TransformAlignmentGuidesPainter oldDelegate) {
+    return oldDelegate.snapTargetX != snapTargetX ||
+        oldDelegate.snapTargetY != snapTargetY;
   }
 }
