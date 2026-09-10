@@ -26,6 +26,35 @@ class ClipSpatialTransform {
   /// Maximum allowable scale
   static const double maxScale = 20.0;
 
+  /// Distance threshold in logical pixels below which clip center auto-snaps to canvas center (0.0)
+  static const double centerSnapThreshold = 10.0;
+
+  /// Distance threshold in logical pixels above which clip center breaks free from center snap
+  static const double centerReleaseThreshold = 14.0;
+
+  /// Computes updated snap state and effective coordinate for a single axis with hysteresis.
+  /// Returns a record: (effectiveCoordinate, isSnapped).
+  static (double, bool) calculateCenterSnap({
+    required double rawCoordinate,
+    required bool currentlySnapped,
+    double snapThreshold = centerSnapThreshold,
+    double releaseThreshold = centerReleaseThreshold,
+  }) {
+    if (currentlySnapped) {
+      if (rawCoordinate.abs() > releaseThreshold) {
+        return (rawCoordinate, false);
+      } else {
+        return (0.0, true);
+      }
+    } else {
+      if (rawCoordinate.abs() <= snapThreshold) {
+        return (0.0, true);
+      } else {
+        return (rawCoordinate, false);
+      }
+    }
+  }
+
   const ClipSpatialTransform({
     required this.clipId,
     this.xPos = 0.0,
