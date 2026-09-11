@@ -1572,13 +1572,13 @@ void main() {
     // 32. Guides painting: guideX and guideY correctly position vertical and horizontal alignment guides
     testWidgets('32. Guides painter renders at exact guideX and guideY coordinates', (tester) async {
       await tester.pumpWidget(
-        MaterialApp(
+        const MaterialApp(
           home: Scaffold(
             body: SizedBox(
               width: 360,
               height: 640,
               child: CustomPaint(
-                painter: const TransformAlignmentGuidesPainter(
+                painter: TransformAlignmentGuidesPainter(
                   guideX: 50.0, // Canvas-relative 50.0 -> Painter X = 50 + 180 = 230.0
                   guideY: -40.0, // Canvas-relative -40.0 -> Painter Y = -40 + 320 = 280.0
                 ),
