@@ -75,6 +75,10 @@ class _InteractiveTransformCanvasContentState extends ConsumerState<_Interactive
   // Snapping state targets for active gesture
   SnapTargetX _snapTargetX = SnapTargetX.none;
   SnapTargetY _snapTargetY = SnapTargetY.none;
+  ActiveSnapTargetX _activeSnapTargetX = ActiveSnapTargetX.none;
+  ActiveSnapTargetY _activeSnapTargetY = ActiveSnapTargetY.none;
+  double? _guideX;
+  double? _guideY;
   Size _lastCanvasSize = const Size(360, 360);
 
   @override
@@ -85,6 +89,10 @@ class _InteractiveTransformCanvasContentState extends ConsumerState<_Interactive
       _isInteracting = false;
       _snapTargetX = SnapTargetX.none;
       _snapTargetY = SnapTargetY.none;
+      _activeSnapTargetX = ActiveSnapTargetX.none;
+      _activeSnapTargetY = ActiveSnapTargetY.none;
+      _guideX = null;
+      _guideY = null;
     }
   }
 
@@ -102,21 +110,12 @@ class _InteractiveTransformCanvasContentState extends ConsumerState<_Interactive
     _startFocalPoint = details.localFocalPoint;
     _isInteracting = true;
 
-    // Evaluate initial snap state based on baseline transform
-    final initialSnap = TransformSnapEngine.evaluateSnap(
-      rawX: _startInitialX,
-      rawY: _startInitialY,
-      scale: _startInitialScale,
-      rotationAngle: _startInitialRotation,
-      canvasSize: _lastCanvasSize,
-      legacyRotationDegrees: widget.clip.rotationDegrees,
-      flipHorizontal: widget.clip.flipHorizontal,
-      flipVertical: widget.clip.flipVertical,
-      currentSnapX: SnapTargetX.none,
-      currentSnapY: SnapTargetY.none,
-    );
-    _snapTargetX = initialSnap.snapTargetX;
-    _snapTargetY = initialSnap.snapTargetY;
+    _snapTargetX = SnapTargetX.none;
+    _snapTargetY = SnapTargetY.none;
+    _activeSnapTargetX = ActiveSnapTargetX.none;
+    _activeSnapTargetY = ActiveSnapTargetY.none;
+    _guideX = null;
+    _guideY = null;
   }
 
   void _onScaleUpdate(ScaleUpdateDetails details) {
@@ -145,8 +144,59 @@ class _InteractiveTransformCanvasContentState extends ConsumerState<_Interactive
       fallback: _startInitialRotation,
     );
 
-    // Apply auto-snap with rotated bounds & hysteresis independently for X and Y axes
-    final snapResult = TransformSnapEngine.evaluateSnap(
+    // Collect visible reference layers from ViewModel
+    final referenceLayers = <TransformAlignmentBounds>[];
+
+    // Other video clips
+    for (final clip in widget.viewModel.videoClips) {
+      if (clip.id != widget.clip.id) {
+        referenceLayers.add(
+          TransformAlignmentBounds.fromVideoClip(
+            clip: clip,
+            canvasSize: _lastCanvasSize,
+          ),
+        );
+      }
+    }
+
+    // Active PIP overlays at playhead
+    for (final overlay in widget.viewModel.activeOverlayClipsAtPlayhead) {
+      if (overlay.id != widget.clip.id) {
+        referenceLayers.add(
+          TransformAlignmentBounds.fromOverlayClip(
+            overlay: overlay,
+            canvasSize: _lastCanvasSize,
+          ),
+        );
+      }
+    }
+
+    // Active text overlays at playhead
+    for (final text in widget.viewModel.activeTextOverlaysAtPlayhead) {
+      if (text.id != widget.clip.id) {
+        referenceLayers.add(
+          TransformAlignmentBounds.fromTextOverlay(
+            text: text,
+            canvasSize: _lastCanvasSize,
+          ),
+        );
+      }
+    }
+
+    // Active stickers at playhead
+    for (final sticker in widget.viewModel.activeStickersAtPlayhead) {
+      if (sticker.id != widget.clip.id) {
+        referenceLayers.add(
+          TransformAlignmentBounds.fromStickerOverlay(
+            sticker: sticker,
+            canvasSize: _lastCanvasSize,
+          ),
+        );
+      }
+    }
+
+    // Apply smart multi-layer auto-snap with rotated bounds & hysteresis
+    final snapResult = TransformSnapEngine.evaluateMultiLayerSnap(
       rawX: rawX,
       rawY: rawY,
       scale: newScale,
@@ -155,14 +205,25 @@ class _InteractiveTransformCanvasContentState extends ConsumerState<_Interactive
       legacyRotationDegrees: widget.clip.rotationDegrees,
       flipHorizontal: widget.clip.flipHorizontal,
       flipVertical: widget.clip.flipVertical,
-      currentSnapX: _snapTargetX,
-      currentSnapY: _snapTargetY,
+      activeLayerId: widget.clip.id,
+      referenceLayers: referenceLayers,
+      currentActiveSnapX: _activeSnapTargetX,
+      currentActiveSnapY: _activeSnapTargetY,
     );
 
-    if (_snapTargetX != snapResult.snapTargetX || _snapTargetY != snapResult.snapTargetY) {
+    if (_snapTargetX != snapResult.snapTargetX ||
+        _snapTargetY != snapResult.snapTargetY ||
+        _activeSnapTargetX != snapResult.activeSnapTargetX ||
+        _activeSnapTargetY != snapResult.activeSnapTargetY ||
+        _guideX != snapResult.guideX ||
+        _guideY != snapResult.guideY) {
       setState(() {
         _snapTargetX = snapResult.snapTargetX;
         _snapTargetY = snapResult.snapTargetY;
+        _activeSnapTargetX = snapResult.activeSnapTargetX;
+        _activeSnapTargetY = snapResult.activeSnapTargetY;
+        _guideX = snapResult.guideX;
+        _guideY = snapResult.guideY;
       });
     }
 
@@ -180,10 +241,17 @@ class _InteractiveTransformCanvasContentState extends ConsumerState<_Interactive
     if (!_isInteracting) return;
     _isInteracting = false;
 
-    if (_snapTargetX != SnapTargetX.none || _snapTargetY != SnapTargetY.none) {
+    if (_activeSnapTargetX.isSnapped ||
+        _activeSnapTargetY.isSnapped ||
+        _snapTargetX != SnapTargetX.none ||
+        _snapTargetY != SnapTargetY.none) {
       setState(() {
+        _activeSnapTargetX = ActiveSnapTargetX.none;
+        _activeSnapTargetY = ActiveSnapTargetY.none;
         _snapTargetX = SnapTargetX.none;
         _snapTargetY = SnapTargetY.none;
+        _guideX = null;
+        _guideY = null;
       });
     }
 
@@ -231,7 +299,10 @@ class _InteractiveTransformCanvasContentState extends ConsumerState<_Interactive
         }
 
         final showGuides = _isInteracting &&
-            (_snapTargetX != SnapTargetX.none || _snapTargetY != SnapTargetY.none);
+            (_activeSnapTargetX.isSnapped ||
+                _activeSnapTargetY.isSnapped ||
+                _snapTargetX != SnapTargetX.none ||
+                _snapTargetY != SnapTargetY.none);
 
         return Stack(
           fit: StackFit.passthrough,
@@ -310,6 +381,8 @@ class _InteractiveTransformCanvasContentState extends ConsumerState<_Interactive
                     painter: TransformAlignmentGuidesPainter(
                       snapTargetX: _snapTargetX,
                       snapTargetY: _snapTargetY,
+                      guideX: _guideX,
+                      guideY: _guideY,
                     ),
                   ),
                 ),
@@ -326,10 +399,14 @@ class _InteractiveTransformCanvasContentState extends ConsumerState<_Interactive
 class TransformAlignmentGuidesPainter extends CustomPainter {
   final SnapTargetX snapTargetX;
   final SnapTargetY snapTargetY;
+  final double? guideX;
+  final double? guideY;
 
   const TransformAlignmentGuidesPainter({
-    required this.snapTargetX,
-    required this.snapTargetY,
+    this.snapTargetX = SnapTargetX.none,
+    this.snapTargetY = SnapTargetY.none,
+    this.guideX,
+    this.guideY,
   });
 
   @override
@@ -347,54 +424,64 @@ class TransformAlignmentGuidesPainter extends CustomPainter {
       ..strokeWidth = 1.0
       ..style = PaintingStyle.stroke;
 
-    // Vertical guides: Center X, Left Edge (x=0), Right Edge (x=size.width)
-    double? guideX;
-    switch (snapTargetX) {
-      case SnapTargetX.centerX:
-        guideX = centerX;
-        break;
-      case SnapTargetX.leftEdge:
-        guideX = 0.0;
-        break;
-      case SnapTargetX.rightEdge:
-        guideX = size.width;
-        break;
-      case SnapTargetX.none:
-        guideX = null;
-        break;
-    }
-
+    // Vertical guides
+    double? px;
     if (guideX != null) {
-      canvas.drawLine(Offset(guideX, 0), Offset(guideX, size.height), glowPaint);
-      canvas.drawLine(Offset(guideX, 0), Offset(guideX, size.height), corePaint);
+      px = guideX! + centerX;
+    } else {
+      switch (snapTargetX) {
+        case SnapTargetX.centerX:
+          px = centerX;
+          break;
+        case SnapTargetX.leftEdge:
+          px = 0.0;
+          break;
+        case SnapTargetX.rightEdge:
+          px = size.width;
+          break;
+        case SnapTargetX.none:
+          px = null;
+          break;
+      }
     }
 
-    // Horizontal guides: Center Y, Top Edge (y=0), Bottom Edge (y=size.height)
-    double? guideY;
-    switch (snapTargetY) {
-      case SnapTargetY.centerY:
-        guideY = centerY;
-        break;
-      case SnapTargetY.topEdge:
-        guideY = 0.0;
-        break;
-      case SnapTargetY.bottomEdge:
-        guideY = size.height;
-        break;
-      case SnapTargetY.none:
-        guideY = null;
-        break;
+    if (px != null) {
+      canvas.drawLine(Offset(px, 0), Offset(px, size.height), glowPaint);
+      canvas.drawLine(Offset(px, 0), Offset(px, size.height), corePaint);
     }
 
+    // Horizontal guides
+    double? py;
     if (guideY != null) {
-      canvas.drawLine(Offset(0, guideY), Offset(size.width, guideY), glowPaint);
-      canvas.drawLine(Offset(0, guideY), Offset(size.width, guideY), corePaint);
+      py = guideY! + centerY;
+    } else {
+      switch (snapTargetY) {
+        case SnapTargetY.centerY:
+          py = centerY;
+          break;
+        case SnapTargetY.topEdge:
+          py = 0.0;
+          break;
+        case SnapTargetY.bottomEdge:
+          py = size.height;
+          break;
+        case SnapTargetY.none:
+          py = null;
+          break;
+      }
+    }
+
+    if (py != null) {
+      canvas.drawLine(Offset(0, py), Offset(size.width, py), glowPaint);
+      canvas.drawLine(Offset(0, py), Offset(size.width, py), corePaint);
     }
   }
 
   @override
   bool shouldRepaint(covariant TransformAlignmentGuidesPainter oldDelegate) {
     return oldDelegate.snapTargetX != snapTargetX ||
-        oldDelegate.snapTargetY != snapTargetY;
+        oldDelegate.snapTargetY != snapTargetY ||
+        oldDelegate.guideX != guideX ||
+        oldDelegate.guideY != guideY;
   }
 }
