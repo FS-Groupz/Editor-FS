@@ -74,7 +74,7 @@ class _EditorSnapshot {
   });
 }
 
-/// Comprehensive ViewModel managing the Mahmas Studio video editor state, timeline playback,
+/// Comprehensive ViewModel managing the Editor FS video editor state, timeline playback,
 /// universal multi-track trimming and dragging, undo/redo history, and export.
 class EditorViewModel extends ChangeNotifier {
   EditorViewModel({Project? initialProject}) {

@@ -1,4 +1,4 @@
-# Mahmas Studio
+# Editor FS
 
 > A modern, local-first Flutter video editing application built with high-performance Android native media pipelines and interactive multi-track timeline controls.
 
@@ -6,7 +6,7 @@
 
 ## 📖 Overview
 
-**Mahmas Studio** is an open-source, local-first mobile video editor designed for high-performance timeline editing on Android devices. Built using Flutter and Dart with native Kotlin platform bridges, Mahmas Studio provides a non-linear video editing experience without relying on cloud processing or remote servers.
+**Editor FS** is an open-source, local-first mobile video editor designed for high-performance timeline editing on Android devices. Built using Flutter and Dart with native Kotlin platform bridges, Editor FS provides a non-linear video editing experience without relying on cloud processing or remote servers.
 
 ### Key Highlights
 - **Local-First Media Engine**: All imported videos, images, and audio tracks are stored directly in the device's app-private storage (`context.filesDir/media/`), processed locally, and played offline.

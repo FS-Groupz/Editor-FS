@@ -1,4 +1,4 @@
-name: Build & Release Mahmas Studio APK
+name: Build & Release Editor FS APK
 
 on:
   push:
@@ -230,7 +230,7 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: mahmas-studio-app-release.apk
+          name: editor-fs-app-release.apk
           path: build/app/outputs/flutter-apk/app-release.apk
 
       - name: Create GitHub Release
@@ -239,7 +239,7 @@ jobs:
         with:
           tag_name: ${{ steps.release_target.outputs.release_tag }}
           target_commitish: ${{ github.sha }}
-          name: MAHMAS Studio ${{ steps.release_target.outputs.release_tag }}
+          name: Editor FS ${{ steps.release_target.outputs.release_tag }}
           files: |
             build/app/outputs/flutter-apk/app-release.apk
           draft: false

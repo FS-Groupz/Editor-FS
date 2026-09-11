@@ -1,10 +1,18 @@
 # Changelog
 
-All notable changes to **Mahmas Studio** are documented in this file.
+All notable changes to **Editor FS** are documented in this file.
 
 ---
 
-## [2.4.8] - 2026-09-06
+## [2.4.11] - 2026-09-11
+
+### 🏷️ Global App Branding Fix
+- **Official App Name**: Renamed user-facing Android application display name to **Editor FS** across launcher, App Info, settings, and task switcher.
+- **Android Manifest & Resources**: Added `@string/app_name` resource (`Editor FS`) and explicitly declared `android:label="@string/app_name"` on both `<application>` and `<activity android:name=".MainActivity">`.
+- **Release Automation**: Updated GitHub Actions release workflow title and artifacts to reflect Editor FS.
+- **Preserved Internal Compatibility**: Preserved all internal package IDs (`com.example.capcut_video_editor`), MethodChannels (`com.mahmas.studio/*`), backward compatibility typedefs, and keystore configurations.
+
+---
 
 ### 🚀 Highlights & Major Features
 - **Real-Time Visual Transition Rendering Engine**: Full multi-layer dual-video preview compositing with 12 distinct GPU-accelerated transition shaders (Fade, Dissolve, Slide Left/Right/Up/Down, Wipe Left/Right, Zoom In/Out, Flash Black/White).

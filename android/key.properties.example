@@ -1,4 +1,4 @@
-# Mahmas Studio - Android Release Signing Configuration Template
+# Editor FS - Android Release Signing Configuration Template
 # ---------------------------------------------------------------
 # Copy this file to `android/key.properties` (which is gitignored):
 #   cp android/key.properties.example android/key.properties

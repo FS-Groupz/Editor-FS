@@ -1,6 +1,6 @@
 import 'package:flutter/services.dart';
 
-/// Centralized, Reusable Text-To-Speech (TTS) Service for Mahmas Studio
+/// Centralized, Reusable Text-To-Speech (TTS) Service for Editor FS
 ///
 /// Features:
 /// - Application-wide centralized voice feedback and accessibility announcements

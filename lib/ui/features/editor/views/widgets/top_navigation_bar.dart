@@ -6,7 +6,7 @@ import 'package:capcut_video_editor/domain/enums/aspect_ratio_preset.dart';
 import 'package:capcut_video_editor/ui/features/editor/view_models/editor_view_model.dart';
 import 'export_modal_sheet.dart';
 
-/// Top bar in Mahmas Studio containing Brand Badge, Aspect Ratio switcher, Undo/Redo, and 1080P Export badge
+/// Top bar in Editor FS containing Brand Badge, Aspect Ratio switcher, Undo/Redo, and 1080P Export badge
 class TopNavigationBar extends StatelessWidget {
   final EditorViewModel viewModel;
 
@@ -36,7 +36,7 @@ class TopNavigationBar extends StatelessWidget {
             },
           ),
 
-          // Left: Mahmas Studio Brand Badge
+          // Left: Editor FS Brand Badge
           _buildBrandBadge(context),
 
           const SizedBox(width: 2),

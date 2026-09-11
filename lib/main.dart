@@ -15,5 +15,5 @@ void main() {
     ),
   );
 
-  runApp(const CapCutVideoEditorApp());
+  runApp(const EditorFSApp());
 }

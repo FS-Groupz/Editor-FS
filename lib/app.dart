@@ -4,8 +4,8 @@ import 'package:capcut_video_editor/core/theme/app_theme.dart';
 import 'package:capcut_video_editor/ui/features/home/views/home_screen.dart';
 
 /// Root application widget
-class MahmasStudioApp extends StatelessWidget {
-  const MahmasStudioApp({super.key});
+class EditorFSApp extends StatelessWidget {
+  const EditorFSApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -20,5 +20,6 @@ class MahmasStudioApp extends StatelessWidget {
   }
 }
 
-// Backward compatibility alias for existing test runners
-typedef CapCutVideoEditorApp = MahmasStudioApp;
+// Backward compatibility aliases for existing test runners and entry points
+typedef MahmasStudioApp = EditorFSApp;
+typedef CapCutVideoEditorApp = EditorFSApp;
