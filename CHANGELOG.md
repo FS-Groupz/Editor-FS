@@ -4,6 +4,22 @@ All notable changes to **Editor FS** are documented in this file.
 
 ---
 
+## [1.0.0] - 2026-09-12
+
+### 🌟 Fresh Public Release Baseline
+- **Official Public Version**: Established fresh public release numbering baseline at **v1.0.0+1** (`versionName: 1.0.0`, `versionCode: 1`) for **Editor FS**.
+- **Complete Feature Set Preserved**:
+  - Full multi-track timeline editing engine (Video, Audio, Text, Stickers, Overlays).
+  - High-performance native Android media playback pipeline with SurfaceTexture preview.
+  - Interactive spatial transform canvas with pan, pinch-to-zoom, rotate, and horizontal/vertical flip.
+  - Smart multi-layer alignment guides and magnetic center/edge auto-snapping.
+  - Hardware-accelerated GPU shader transitions (12 styles) and 1080P MP4 export engine.
+  - Non-destructive split-cut, ripple delete, clip duplicate, and universal multi-level undo/redo history.
+  - Text-To-Speech (TTS) integration, sound effects library, and local draft persistence.
+- **Architectural Stability**: 100% preservation of application ID, native bridges, MethodChannels, and security configurations.
+
+---
+
 ## [2.4.11] - 2026-09-11
 
 ### 🏷️ Global App Branding Fix
