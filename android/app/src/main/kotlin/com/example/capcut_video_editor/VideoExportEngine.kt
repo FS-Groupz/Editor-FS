@@ -199,32 +199,33 @@ class VideoExportEngine(private val context: Context) {
                 return true
             }
 
-            val timeoutUs = 2000L
             var loops = 0
-            val maxLoops = 200
+            val maxLoops = 100
 
             while (loops++ < maxLoops) {
-                // Feed input
-                if (!isEos) {
-                    val inIdx = decoder!!.dequeueInputBuffer(timeoutUs)
-                    if (inIdx >= 0) {
-                        val inBuf = decoder!!.getInputBuffer(inIdx)
-                        if (inBuf != null) {
-                            val size = extractor!!.readSampleData(inBuf, 0)
-                            if (size < 0) {
-                                decoder!!.queueInputBuffer(inIdx, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                                isEos = true
-                            } else {
-                                val pts = extractor!!.sampleTime
-                                decoder!!.queueInputBuffer(inIdx, 0, size, pts, 0)
-                                extractor!!.advance()
-                            }
+                // Non-blocking feed extractor samples into decoder input buffers
+                while (!isEos) {
+                    val inIdx = decoder!!.dequeueInputBuffer(0L)
+                    if (inIdx < 0) break
+                    val inBuf = decoder!!.getInputBuffer(inIdx)
+                    if (inBuf != null) {
+                        val size = extractor!!.readSampleData(inBuf, 0)
+                        if (size < 0) {
+                            decoder!!.queueInputBuffer(inIdx, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            isEos = true
+                            break
+                        } else {
+                            val pts = extractor!!.sampleTime
+                            decoder!!.queueInputBuffer(inIdx, 0, size, pts, 0)
+                            extractor!!.advance()
                         }
+                    } else {
+                        break
                     }
                 }
 
-                // Dequeue output
-                val outIdx = decoder!!.dequeueOutputBuffer(bufferInfo, timeoutUs)
+                // Dequeue decoded output buffer (short timeout 1000us)
+                val outIdx = decoder!!.dequeueOutputBuffer(bufferInfo, 1000L)
                 if (outIdx >= 0) {
                     if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
                         decoder!!.releaseOutputBuffer(outIdx, false)
@@ -361,6 +362,11 @@ class VideoExportEngine(private val context: Context) {
         val identityMatrix = FloatArray(16)
         val tex2DSTMatrix = FloatArray(16)
 
+        val reusableModelMatrix = FloatArray(16)
+        val reusableMvpMatrix = FloatArray(16)
+        val reusableQuadBuffer: FloatBuffer
+        val fullQuadBuffer: FloatBuffer
+
         // Quad for full screen FBO blitting
         private val fboQuadBuffer: FloatBuffer
 
@@ -374,6 +380,22 @@ class VideoExportEngine(private val context: Context) {
             Matrix.setIdentityM(tex2DSTMatrix, 0)
             Matrix.translateM(tex2DSTMatrix, 0, 0f, 1f, 0f)
             Matrix.scaleM(tex2DSTMatrix, 0, 1f, -1f, 1f)
+
+            reusableQuadBuffer = ByteBuffer.allocateDirect(16 * 4)
+                .order(ByteOrder.nativeOrder())
+                .asFloatBuffer()
+
+            val fullQuad = floatArrayOf(
+                0f,              0f,               0.0f, 0.0f,
+                0f,              height.toFloat(), 0.0f, 1.0f,
+                width.toFloat(), 0f,               1.0f, 0.0f,
+                width.toFloat(), height.toFloat(), 1.0f, 1.0f
+            )
+            fullQuadBuffer = ByteBuffer.allocateDirect(fullQuad.size * 4)
+                .order(ByteOrder.nativeOrder())
+                .asFloatBuffer()
+                .put(fullQuad)
+            fullQuadBuffer.position(0)
 
             // FBO Quad: maps [-1, 1] NDC with UVs where top-left is (0, 1) and bottom-left is (0, 0)
             val fboQuad = floatArrayOf(
@@ -819,6 +841,9 @@ class VideoExportEngine(private val context: Context) {
             setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
             setInteger(MediaFormat.KEY_FRAME_RATE, fps)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, IFRAME_INTERVAL)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                setInteger(MediaFormat.KEY_PRIORITY, 0)
+            }
         }
 
         val encoder = MediaCodec.createEncoderByType(MIME_TYPE)
@@ -870,7 +895,17 @@ class VideoExportEngine(private val context: Context) {
         val photoDimensions = mutableMapOf<String, Pair<Int, Int>>()
         val videoDecoders = mutableMapOf<String, HardwareVideoDecoder>()
 
-        // Preload photo textures
+        var decoderInitNs = 0L
+        var totalDecodeNs = 0L
+        var totalProcessNs = 0L
+        var totalRenderNs = 0L
+        var totalInputNs = 0L
+        var totalDrainNs = 0L
+        var audioRemuxNs = 0L
+        var muxFinalizeNs = 0L
+
+        val initStart = System.nanoTime()
+        // Preload photo textures and pre-warm video decoders
         for (clip in clips) {
             val p = clip.path
             if (!p.isNullOrBlank() && File(p).exists()) {
@@ -895,9 +930,23 @@ class VideoExportEngine(private val context: Context) {
                             Log.w(TAG, "Failed caching photo at $p: ${e.message}")
                         }
                     }
+                } else {
+                    if (!videoDecoders.containsKey(p)) {
+                        try {
+                            val dec = HardwareVideoDecoder(p)
+                            if (dec.isInitialized) {
+                                videoDecoders[p] = dec
+                            } else {
+                                dec.release()
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed initializing decoder for $p: ${e.message}")
+                        }
+                    }
                 }
             }
         }
+        decoderInitNs = System.nanoTime() - initStart
 
         // Framebuffers for transition compositing (only allocated if transitions exist)
         val hasTransitions = transitions.any { it.enabled && it.durationMs > 0 && it.type != "none" }
@@ -970,10 +1019,11 @@ class VideoExportEngine(private val context: Context) {
 
         // Helper to render a clip onto whichever framebuffer is currently bound
         fun renderClip(clip: ExportClip, localTimeMs: Long) {
+            val processStart = System.nanoTime()
             val path = clip.path
             val decoder = if (!clip.isPhoto && path != null) getDecoderForClip(clip) else null
 
-            // 1. Calculate transform matrices
+            // 1. Calculate transform matrices (reusable)
             val centerX = width / 2f
             val centerY = height / 2f
             val kCanvas = width.toFloat() / 360f
@@ -985,14 +1035,14 @@ class VideoExportEngine(private val context: Context) {
             val continuousDeg = (clip.safeRotationAngle.toFloat() * 180f / Math.PI.toFloat())
             val totalRotationDeg = clip.rotationDegrees.toFloat() + continuousDeg
 
-            val modelMatrix = FloatArray(16)
+            val modelMatrix = inputSurface.reusableModelMatrix
             Matrix.setIdentityM(modelMatrix, 0)
             Matrix.translateM(modelMatrix, 0, centerX + xExport, centerY + yExport, 0f)
             Matrix.rotateM(modelMatrix, 0, totalRotationDeg, 0f, 0f, 1f)
             Matrix.scaleM(modelMatrix, 0, scaleX, scaleY, 1f)
             Matrix.translateM(modelMatrix, 0, -centerX, -centerY, 0f)
 
-            val mvpMatrix = FloatArray(16)
+            val mvpMatrix = inputSurface.reusableMvpMatrix
             Matrix.multiplyMM(mvpMatrix, 0, inputSurface.projMatrix, 0, modelMatrix, 0)
 
             // Determine dimensions and aspect ratio
@@ -1001,9 +1051,14 @@ class VideoExportEngine(private val context: Context) {
             var isVideo = false
             var isPhoto = false
 
+            var decodeDurationNs = 0L
             if (decoder != null && decoder.isInitialized) {
                 isVideo = true
+                val t0 = System.nanoTime()
                 decoder.advanceTo(localTimeMs * 1000L)
+                decodeDurationNs = System.nanoTime() - t0
+                totalDecodeNs += decodeDurationNs
+
                 val rot = decoder.videoRotation
                 if (rot == 90 || rot == 270) {
                     contentW = decoder.videoHeight
@@ -1043,39 +1098,27 @@ class VideoExportEngine(private val context: Context) {
                 dstBottom = height.toFloat()
             }
 
-            // Build quad buffer for dstRect (OpenGL standard: V=1.0 at dstTop, V=0.0 at dstBottom)
-            val quadData = floatArrayOf(
-                dstLeft,  dstTop,    0.0f, 1.0f, // top-left
-                dstLeft,  dstBottom, 0.0f, 0.0f, // bottom-left
-                dstRight, dstTop,    1.0f, 1.0f, // top-right
-                dstRight, dstBottom, 1.0f, 0.0f  // bottom-right
-            )
-            val quadBuffer = ByteBuffer.allocateDirect(quadData.size * 4)
-                .order(ByteOrder.nativeOrder())
-                .asFloatBuffer()
-                .put(quadData)
-            quadBuffer.position(0)
+            // Populate reusable quad buffer for dstRect (OpenGL standard: V=1.0 at dstTop, V=0.0 at dstBottom)
+            inputSurface.reusableQuadBuffer.clear()
+            inputSurface.reusableQuadBuffer.put(dstLeft).put(dstTop).put(0.0f).put(1.0f)
+            inputSurface.reusableQuadBuffer.put(dstLeft).put(dstBottom).put(0.0f).put(0.0f)
+            inputSurface.reusableQuadBuffer.put(dstRight).put(dstTop).put(1.0f).put(1.0f)
+            inputSurface.reusableQuadBuffer.put(dstRight).put(dstBottom).put(1.0f).put(0.0f)
+            inputSurface.reusableQuadBuffer.position(0)
 
+            val processEnd = System.nanoTime()
+            totalProcessNs += (processEnd - processStart - decodeDurationNs)
+
+            val renderStart = System.nanoTime()
             if (isVideo && decoder != null) {
-                inputSurface.renderOESTexture(decoder.textureId, mvpMatrix, decoder.stMatrix, quadBuffer)
+                inputSurface.renderOESTexture(decoder.textureId, mvpMatrix, decoder.stMatrix, inputSurface.reusableQuadBuffer)
             } else if (isPhoto && path != null && photoTextures.containsKey(path)) {
                 val tex = photoTextures[path] ?: 0
-                inputSurface.render2DTexture(tex, mvpMatrix, quadBuffer)
+                inputSurface.render2DTexture(tex, mvpMatrix, inputSurface.reusableQuadBuffer)
             } else {
-                // Render solid placeholder quad
-                val fullQuadData = floatArrayOf(
-                    0f,            0f,             0.0f, 0.0f,
-                    0f,            height.toFloat(), 0.0f, 1.0f,
-                    width.toFloat(), 0f,             1.0f, 0.0f,
-                    width.toFloat(), height.toFloat(), 1.0f, 1.0f
-                )
-                val fullQuadBuffer = ByteBuffer.allocateDirect(fullQuadData.size * 4)
-                    .order(ByteOrder.nativeOrder())
-                    .asFloatBuffer()
-                    .put(fullQuadData)
-                fullQuadBuffer.position(0)
-                inputSurface.renderSolidColor(clip.color, mvpMatrix, fullQuadBuffer)
+                inputSurface.renderSolidColor(clip.color, mvpMatrix, inputSurface.fullQuadBuffer)
             }
+            totalRenderNs += (System.nanoTime() - renderStart)
         }
 
         fun transitionTypeToIndex(type: String): Int {
@@ -1096,10 +1139,6 @@ class VideoExportEngine(private val context: Context) {
             }
         }
 
-        var totalDecodeNs = 0L
-        var totalRenderNs = 0L
-        var totalDrainNs = 0L
-
         try {
             val frameDurationMs = 1000.0 / fps
             for (frameIndex in 0 until totalFrames) {
@@ -1111,31 +1150,31 @@ class VideoExportEngine(private val context: Context) {
                 var rightClipIndex = -1
                 var transitionProgress = 0.0
 
-                for (i in 0 until clips.size - 1) {
-                    val left = clips[i]
-                    val right = clips[i + 1]
-                    val boundaryTimeMs = clipStartTimes[i] + left.activeDurationMs
+                if (hasTransitions) {
+                    for (i in 0 until clips.size - 1) {
+                        val left = clips[i]
+                        val right = clips[i + 1]
+                        val boundaryTimeMs = clipStartTimes[i] + left.activeDurationMs
 
-                    val trans = transitions.firstOrNull {
-                        it.enabled && it.leftClipId == left.id && it.rightClipId == right.id && it.type != "none"
-                    }
-                    if (trans != null && trans.durationMs > 0) {
-                        val halfDurationMs = trans.durationMs / 2
-                        val transitionStartMs = boundaryTimeMs - halfDurationMs
-                        val transitionEndMs = boundaryTimeMs + halfDurationMs
+                        val trans = transitions.firstOrNull {
+                            it.enabled && it.leftClipId == left.id && it.rightClipId == right.id && it.type != "none"
+                        }
+                        if (trans != null && trans.durationMs > 0) {
+                            val halfDurationMs = trans.durationMs / 2
+                            val transitionStartMs = boundaryTimeMs - halfDurationMs
+                            val transitionEndMs = boundaryTimeMs + halfDurationMs
 
-                        if (currentTimeMs in transitionStartMs..transitionEndMs) {
-                            activeTransition = trans
-                            leftClipIndex = i
-                            rightClipIndex = i + 1
-                            transitionProgress = ((currentTimeMs - transitionStartMs).toDouble() / trans.durationMs)
-                                .coerceIn(0.0, 1.0)
-                            break
+                            if (currentTimeMs in transitionStartMs..transitionEndMs) {
+                                activeTransition = trans
+                                leftClipIndex = i
+                                rightClipIndex = i + 1
+                                transitionProgress = ((currentTimeMs - transitionStartMs).toDouble() / trans.durationMs)
+                                    .coerceIn(0.0, 1.0)
+                                break
+                            }
                         }
                     }
                 }
-
-                val renderStart = System.nanoTime()
 
                 // 2. Render Frame (Hardware Compositing)
                 if (activeTransition != null && leftClipIndex != -1 && rightClipIndex != -1 && fboA != null && fboB != null) {
@@ -1164,7 +1203,9 @@ class VideoExportEngine(private val context: Context) {
                     GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
 
                     val typeIdx = transitionTypeToIndex(activeTransition.type)
+                    val transStart = System.nanoTime()
                     inputSurface.renderTransition(fboA.textureId, fboB.textureId, typeIdx, transitionProgress.toFloat())
+                    totalRenderNs += (System.nanoTime() - transStart)
                 } else {
                     // Single Clip Frame - Direct Render to Encoder Surface (Zero FBO overhead)
                     var activeClipIndex = 0
@@ -1187,18 +1228,16 @@ class VideoExportEngine(private val context: Context) {
                     renderClip(clip, localMs)
                 }
 
-                val renderDone = System.nanoTime()
-                totalRenderNs += (renderDone - renderStart)
-
                 // 3. Submit Frame to MediaCodec
+                val inputStart = System.nanoTime()
                 val ptsNs = (frameIndex * 1_000_000_000L) / fps
                 inputSurface.setPresentationTime(ptsNs)
                 inputSurface.swapBuffers()
+                totalInputNs += (System.nanoTime() - inputStart)
 
                 val drainStart = System.nanoTime()
                 drainEncoder(false)
-                val drainDone = System.nanoTime()
-                totalDrainNs += (drainDone - drainStart)
+                totalDrainNs += (System.nanoTime() - drainStart)
 
                 // Report progress
                 if (frameIndex % max(1, totalFrames / 20) == 0 || frameIndex == totalFrames - 1) {
@@ -1208,18 +1247,21 @@ class VideoExportEngine(private val context: Context) {
             }
 
             // Signal End of Video Stream
+            val drainEosStart = System.nanoTime()
             encoder.signalEndOfInputStream()
             drainEncoder(true)
+            totalDrainNs += (System.nanoTime() - drainEosStart)
 
             // 4. Remux Audio Track if available
             if (audioExtractor != null && audioTrackIndex != -1 && muxerStarted) {
+                val audioStart = System.nanoTime()
                 try {
                     val maxBufferSize = if (audioFormat?.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE) == true) {
                         audioFormat.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE)
                     } else {
                         256 * 1024
                     }
-                    val audioBuffer = ByteBuffer.allocate(maxBufferSize)
+                    val audioBuffer = ByteBuffer.allocateDirect(maxBufferSize)
                     val audioBufferInfo = MediaCodec.BufferInfo()
 
                     while (true) {
@@ -1239,21 +1281,65 @@ class VideoExportEngine(private val context: Context) {
                 } catch (audioEx: Exception) {
                     Log.w(TAG, "Audio sample remuxing error: ${audioEx.message}")
                 }
+                audioRemuxNs = System.nanoTime() - audioStart
             }
+
+            // 5. Finalize Muxer
+            val muxStart = System.nanoTime()
+            try {
+                if (muxerStarted) {
+                    muxer.stop()
+                    muxerStarted = false
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Muxer stop exception: ${e.message}")
+            }
+            muxFinalizeNs = System.nanoTime() - muxStart
 
             progressCallback?.onProgress(0.95)
 
             val elapsedSec = (System.nanoTime() - startTimeNs) / 1_000_000_000.0
             val effectiveFps = totalFrames / elapsedSec
             val realtimeFactor = (totalDurationMs / 1000.0) / elapsedSec
+            val wallClockMs = elapsedSec * 1000.0
+
+            val decInitMs = decoderInitNs / 1_000_000.0
+            val decodeMs = totalDecodeNs / 1_000_000.0
+            val processMs = totalProcessNs / 1_000_000.0
+            val renderMs = totalRenderNs / 1_000_000.0
+            val inputMs = totalInputNs / 1_000_000.0
+            val drainMs = totalDrainNs / 1_000_000.0
+            val audioMs = audioRemuxNs / 1_000_000.0
+            val muxMs = muxFinalizeNs / 1_000_000.0
+
             Log.i(
                 TAG,
-                "Hardware Export COMPLETED in %.2fs. Effective FPS: %.2f (%.2fx realtime). Render avg: %.2fms, Drain avg: %.2fms".format(
-                    elapsedSec,
-                    effectiveFps,
-                    realtimeFactor,
-                    (totalRenderNs / totalFrames) / 1_000_000.0,
-                    (totalDrainNs / totalFrames) / 1_000_000.0
+                """
+================ EXPORT PIPELINE PERFORMANCE PROFILE ================
+Output: ${width}x${height} @ ${fps}fps ($bitrate bps)
+Total Frames: $totalFrames | Total Duration: ${totalDurationMs}ms
+Wall Clock Time: %.3fs | Effective FPS: %.2f (%.2fx realtime)
+---------------------------------------------------------------------
+STAGE BREAKDOWN:
+1. DECODER_INIT  : %8.2f ms (%5.1f%%)
+2. FRAME_DECODE  : %8.2f ms (%5.1f%%) | avg: %6.2f ms/frame
+3. FRAME_PROCESS : %8.2f ms (%5.1f%%) | avg: %6.2f ms/frame
+4. GPU_RENDER    : %8.2f ms (%5.1f%%) | avg: %6.2f ms/frame
+5. ENCODER_INPUT : %8.2f ms (%5.1f%%) | avg: %6.2f ms/frame
+6. ENCODER_DRAIN : %8.2f ms (%5.1f%%) | avg: %6.2f ms/frame
+7. AUDIO_REMUX   : %8.2f ms (%5.1f%%)
+8. MUX_FINALIZE  : %8.2f ms (%5.1f%%)
+=====================================================================
+""".trimIndent().format(
+                    elapsedSec, effectiveFps, realtimeFactor,
+                    decInitMs, (decInitMs / wallClockMs) * 100.0,
+                    decodeMs, (decodeMs / wallClockMs) * 100.0, decodeMs / totalFrames,
+                    processMs, (processMs / wallClockMs) * 100.0, processMs / totalFrames,
+                    renderMs, (renderMs / wallClockMs) * 100.0, renderMs / totalFrames,
+                    inputMs, (inputMs / wallClockMs) * 100.0, inputMs / totalFrames,
+                    drainMs, (drainMs / wallClockMs) * 100.0, drainMs / totalFrames,
+                    audioMs, (audioMs / wallClockMs) * 100.0,
+                    muxMs, (muxMs / wallClockMs) * 100.0
                 )
             )
 
@@ -1288,9 +1374,13 @@ class VideoExportEngine(private val context: Context) {
             throw RuntimeException("Export failed: Output file was empty or not generated.")
         }
 
-        // 5. Register video into MediaStore Gallery
+        // 6. Register video into MediaStore Gallery
         val galleryResult = registerToMediaStore(tempOutputFile, customOutputName)
         progressCallback?.onProgress(1.0)
+
+        val finalElapsedSec = (System.nanoTime() - startTimeNs) / 1_000_000_000.0
+        val finalEffectiveFps = totalFrames / finalElapsedSec
+        val finalRealtimeFactor = (totalDurationMs / 1000.0) / finalElapsedSec
 
         return mapOf(
             "success" to true,
@@ -1303,7 +1393,20 @@ class VideoExportEngine(private val context: Context) {
             "height" to height,
             "fps" to fps,
             "bitrate" to bitrate,
-            "codec" to "H.264 / AVC"
+            "codec" to "H.264 / AVC",
+            "exportMetrics" to mapOf(
+                "wallClockSec" to finalElapsedSec,
+                "effectiveFps" to finalEffectiveFps,
+                "realtimeFactor" to finalRealtimeFactor,
+                "decoderInitMs" to decoderInitNs / 1_000_000.0,
+                "frameDecodeMs" to totalDecodeNs / 1_000_000.0,
+                "frameProcessMs" to totalProcessNs / 1_000_000.0,
+                "gpuRenderMs" to totalRenderNs / 1_000_000.0,
+                "encoderInputMs" to totalInputNs / 1_000_000.0,
+                "encoderDrainMs" to totalDrainNs / 1_000_000.0,
+                "audioRemuxMs" to audioRemuxNs / 1_000_000.0,
+                "muxFinalizeMs" to muxFinalizeNs / 1_000_000.0
+            )
         )
     }
 
