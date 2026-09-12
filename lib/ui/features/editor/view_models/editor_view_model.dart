@@ -257,11 +257,14 @@ class EditorViewModel extends ChangeNotifier {
   bool _isExporting = false;
   double _exportProgress = 0.0;
   Timer? _exportTimer;
+  Map<String, dynamic>? _lastExportResult;
 
   // Audio Extraction State
   bool _isExtractingAudio = false;
 
   // --- Getters ---
+
+  Map<String, dynamic>? get lastExportResult => _lastExportResult;
 
   List<MediaAsset> get mediaLibrary => List.unmodifiable(_mediaLibrary);
   List<VideoClip> get videoClips => List.unmodifiable(_videoClips);
@@ -2643,7 +2646,7 @@ class EditorViewModel extends ChangeNotifier {
 
     try {
       final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final exportFileName = 'MAHMAS_$timestamp.mp4';
+      final exportFileName = 'EDITOR_FS_$timestamp.mp4';
 
       final exportResult = await DeviceMediaService.renderAndExportVideo(
         project: _currentProject,
@@ -2656,6 +2659,7 @@ class EditorViewModel extends ChangeNotifier {
         },
       );
 
+      _lastExportResult = exportResult;
       final success = exportResult['success'] == true;
       final outputPath = exportResult['path'] as String?;
 

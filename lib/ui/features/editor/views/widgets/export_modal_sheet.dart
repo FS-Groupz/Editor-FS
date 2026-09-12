@@ -217,12 +217,20 @@ class _ExportModalSheetState extends State<ExportModalSheet> {
                   height: 50,
                   child: ElevatedButton(
                     onPressed: () {
+                      final chosenResolution = viewModel.exportSettings.resolution.label;
+                      final chosenFps = viewModel.exportSettings.fps.fpsNumber;
                       viewModel.exportVideoToGallery(
                         onFinished: (success, outputPath) {
                           if (mounted) {
                             Navigator.of(context).pop();
                             if (success) {
-                              _showSuccessDialog(context, outputPath);
+                              final exportedFps = (viewModel.lastExportResult?['fps'] as int?) ?? chosenFps;
+                              _showSuccessDialog(
+                                context,
+                                outputPath: outputPath,
+                                resolutionLabel: chosenResolution,
+                                fps: exportedFps,
+                              );
                             } else {
                               ScaffoldMessenger.of(context).showSnackBar(
                                 SnackBar(
@@ -312,7 +320,12 @@ class _ExportModalSheetState extends State<ExportModalSheet> {
     );
   }
 
-  void _showSuccessDialog(BuildContext context, [String? outputPath]) {
+  void _showSuccessDialog(
+    BuildContext context, {
+    String? outputPath,
+    String resolutionLabel = '1080P',
+    int fps = 30,
+  }) {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -329,9 +342,9 @@ class _ExportModalSheetState extends State<ExportModalSheet> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'Your video was rendered and saved to your device album / Gallery at 1080P 60fps.',
-              style: TextStyle(color: AppColors.textSecondary),
+            Text(
+              'Your video was rendered and saved to your device album / Gallery at $resolutionLabel ${fps}fps.',
+              style: const TextStyle(color: AppColors.textSecondary),
             ),
             if (outputPath != null) ...[
               const SizedBox(height: 10),

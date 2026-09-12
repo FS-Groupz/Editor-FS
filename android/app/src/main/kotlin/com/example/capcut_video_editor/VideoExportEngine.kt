@@ -359,6 +359,7 @@ class VideoExportEngine(private val context: Context) {
 
         val projMatrix = FloatArray(16)
         val identityMatrix = FloatArray(16)
+        val tex2DSTMatrix = FloatArray(16)
 
         // Quad for full screen FBO blitting
         private val fboQuadBuffer: FloatBuffer
@@ -370,6 +371,9 @@ class VideoExportEngine(private val context: Context) {
 
             Matrix.orthoM(projMatrix, 0, 0f, width.toFloat(), height.toFloat(), 0f, -1f, 1f)
             Matrix.setIdentityM(identityMatrix, 0)
+            Matrix.setIdentityM(tex2DSTMatrix, 0)
+            Matrix.translateM(tex2DSTMatrix, 0, 0f, 1f, 0f)
+            Matrix.scaleM(tex2DSTMatrix, 0, 1f, -1f, 1f)
 
             // FBO Quad: maps [-1, 1] NDC with UVs where top-left is (0, 1) and bottom-left is (0, 0)
             val fboQuad = floatArrayOf(
@@ -679,7 +683,7 @@ class VideoExportEngine(private val context: Context) {
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureId)
 
             GLES20.glUniformMatrix4fv(tex2DMVPLoc, 1, false, mvpMatrix, 0)
-            GLES20.glUniformMatrix4fv(tex2DSTLoc, 1, false, identityMatrix, 0)
+            GLES20.glUniformMatrix4fv(tex2DSTLoc, 1, false, tex2DSTMatrix, 0)
 
             quadBuffer.position(0)
             GLES20.glVertexAttribPointer(tex2DPosLoc, 2, GLES20.GL_FLOAT, false, 4 * 4, quadBuffer)
@@ -783,9 +787,9 @@ class VideoExportEngine(private val context: Context) {
 
         val startTimeNs = System.nanoTime()
 
-        // Align dimensions to multiples of 16 for H.264 encoder compatibility
-        val width = (targetWidth / 16) * 16
-        val height = (targetHeight / 16) * 16
+        // Align dimensions to multiples of 2 for video encoder compatibility (YUV 4:2:0 subsampling)
+        val width = (targetWidth / 2) * 2
+        val height = (targetHeight / 2) * 2
         val fps = if (targetFps in 15..60) targetFps else 30
         val bitrate = if (targetBitrate > 500_000) targetBitrate else 4_000_000
 
@@ -1039,12 +1043,12 @@ class VideoExportEngine(private val context: Context) {
                 dstBottom = height.toFloat()
             }
 
-            // Build quad buffer for dstRect
+            // Build quad buffer for dstRect (OpenGL standard: V=1.0 at dstTop, V=0.0 at dstBottom)
             val quadData = floatArrayOf(
-                dstLeft,  dstTop,    0.0f, 0.0f, // top-left
-                dstLeft,  dstBottom, 0.0f, 1.0f, // bottom-left
-                dstRight, dstTop,    1.0f, 0.0f, // top-right
-                dstRight, dstBottom, 1.0f, 1.0f  // bottom-right
+                dstLeft,  dstTop,    0.0f, 1.0f, // top-left
+                dstLeft,  dstBottom, 0.0f, 0.0f, // bottom-left
+                dstRight, dstTop,    1.0f, 1.0f, // top-right
+                dstRight, dstBottom, 1.0f, 0.0f  // bottom-right
             )
             val quadBuffer = ByteBuffer.allocateDirect(quadData.size * 4)
                 .order(ByteOrder.nativeOrder())
@@ -1187,7 +1191,7 @@ class VideoExportEngine(private val context: Context) {
                 totalRenderNs += (renderDone - renderStart)
 
                 // 3. Submit Frame to MediaCodec
-                val ptsNs = (frameIndex * (1_000_000_000L / fps))
+                val ptsNs = (frameIndex * 1_000_000_000L) / fps
                 inputSurface.setPresentationTime(ptsNs)
                 inputSurface.swapBuffers()
 
@@ -1294,7 +1298,12 @@ class VideoExportEngine(private val context: Context) {
             "uri" to (galleryResult["uri"] ?: ""),
             "displayName" to (galleryResult["displayName"] ?: tempOutputFile.name),
             "sizeBytes" to tempOutputFile.length(),
-            "durationMs" to totalDurationMs
+            "durationMs" to totalDurationMs,
+            "width" to width,
+            "height" to height,
+            "fps" to fps,
+            "bitrate" to bitrate,
+            "codec" to "H.264 / AVC"
         )
     }
 

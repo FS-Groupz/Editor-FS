@@ -391,7 +391,7 @@ class DeviceMediaService {
       'height': targetHeight,
       'fps': targetFps,
       'bitrate': (settings.resolution.sizeMultiplier * 3500000).round(),
-      'fileName': outputFileName ?? 'MAHMAS_${DateTime.now().millisecondsSinceEpoch}.mp4',
+      'fileName': outputFileName ?? 'EDITOR_FS_${DateTime.now().millisecondsSinceEpoch}.mp4',
       'clips': clipsPayload,
       'transitions': transitionsPayload,
       'audioTracks': audioPayload,
@@ -419,7 +419,7 @@ class DeviceMediaService {
       debugPrint('[DeviceMediaService] Platform channel not available for renderAndExportVideo (simulated/test environment)');
       // Test environment simulation fallback:
       final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final fileName = outputFileName ?? 'MAHMAS_$timestamp.mp4';
+      final fileName = outputFileName ?? 'EDITOR_FS_$timestamp.mp4';
       final tempDir = Directory.systemTemp;
       final file = File('${tempDir.path}/$fileName');
 
@@ -444,6 +444,11 @@ class DeviceMediaService {
         'simulated': true,
         'sizeBytes': file.lengthSync(),
         'durationMs': (project.durationInSeconds * 1000).round(),
+        'width': targetWidth,
+        'height': targetHeight,
+        'fps': targetFps,
+        'bitrate': (settings.resolution.sizeMultiplier * 3500000).round(),
+        'codec': 'H.264 / AVC',
       };
     }
   }

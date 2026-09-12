@@ -22,4 +22,17 @@ enum ExportFps {
 
   final String label;
   final String description;
+
+  int get fpsNumber {
+    switch (this) {
+      case ExportFps.fps24:
+        return 24;
+      case ExportFps.fps30:
+        return 30;
+      case ExportFps.fps50:
+        return 50;
+      case ExportFps.fps60:
+        return 60;
+    }
+  }
 }
