@@ -5,7 +5,16 @@ import android.content.Context
 import android.graphics.*
 import android.media.*
 import android.net.Uri
-import android.opengl.*
+import android.opengl.EGL14
+import android.opengl.EGLConfig
+import android.opengl.EGLContext
+import android.opengl.EGLDisplay
+import android.opengl.EGLExt
+import android.opengl.EGLSurface
+import android.opengl.GLES11Ext
+import android.opengl.GLES20
+import android.opengl.GLUtils
+import android.opengl.Matrix
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
@@ -78,8 +87,9 @@ data class ExportAudioTrack(
 )
 
 /**
- * High-performance hardware video export engine using Android MediaCodec,
- * EGL / OpenGL ES 2.0 InputSurface, and Canvas-based 12-type visual transition compositing.
+ * High-performance hardware video export engine using Android MediaExtractor,
+ * MediaCodec hardware decoders, SurfaceTexture (GL_TEXTURE_EXTERNAL_OES),
+ * EGL / OpenGL ES 2.0 InputSurface, hardware transition shaders, and zero-CPU-copy compositing.
  */
 class VideoExportEngine(private val context: Context) {
     companion object {
@@ -94,39 +104,285 @@ class VideoExportEngine(private val context: Context) {
     }
 
     /**
-     * EGL InputSurface wrapper for MediaCodec encoder
+     * Sequential Hardware Video Decoder using MediaExtractor + MediaCodec + SurfaceTexture
+     */
+    class HardwareVideoDecoder(val filePath: String) {
+        private var extractor: MediaExtractor? = null
+        private var decoder: MediaCodec? = null
+        private var surfaceTexture: SurfaceTexture? = null
+        private var surface: Surface? = null
+        var textureId: Int = 0
+            private set
+        var videoWidth: Int = 0
+            private set
+        var videoHeight: Int = 0
+            private set
+        var videoRotation: Int = 0
+            private set
+        val stMatrix = FloatArray(16)
+        private var isEos = false
+        private var currentPtsUs: Long = -1L
+        private val bufferInfo = MediaCodec.BufferInfo()
+        var isInitialized = false
+            private set
+
+        init {
+            try {
+                // 1. Generate OES Texture
+                val textures = IntArray(1)
+                GLES20.glGenTextures(1, textures, 0)
+                textureId = textures[0]
+                GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId)
+                GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+                GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+                GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+                GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+
+                surfaceTexture = SurfaceTexture(textureId)
+                surface = Surface(surfaceTexture)
+                Matrix.setIdentityM(stMatrix, 0)
+
+                // 2. Setup Extractor & MediaCodec Decoder
+                val ext = MediaExtractor()
+                ext.setDataSource(filePath)
+                extractor = ext
+
+                var videoTrack = -1
+                var videoFormat: MediaFormat? = null
+                for (i in 0 until ext.trackCount) {
+                    val format = ext.getTrackFormat(i)
+                    val mime = format.getString(MediaFormat.KEY_MIME) ?: ""
+                    if (mime.startsWith("video/")) {
+                        videoTrack = i
+                        videoFormat = format
+                        ext.selectTrack(i)
+                        break
+                    }
+                }
+
+                if (videoTrack != -1 && videoFormat != null) {
+                    videoWidth = if (videoFormat.containsKey(MediaFormat.KEY_WIDTH)) videoFormat.getInteger(MediaFormat.KEY_WIDTH) else 1920
+                    videoHeight = if (videoFormat.containsKey(MediaFormat.KEY_HEIGHT)) videoFormat.getInteger(MediaFormat.KEY_HEIGHT) else 1080
+                    if (videoFormat.containsKey(MediaFormat.KEY_ROTATION)) {
+                        videoRotation = videoFormat.getInteger(MediaFormat.KEY_ROTATION)
+                    }
+
+                    val mime = videoFormat.getString(MediaFormat.KEY_MIME) ?: MediaFormat.MIMETYPE_VIDEO_AVC
+                    val dec = MediaCodec.createDecoderByType(mime)
+                    dec.configure(videoFormat, surface, null, 0)
+                    dec.start()
+                    decoder = dec
+                    isInitialized = true
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Hardware decoder initialization failed for $filePath: ${e.message}")
+                release()
+                isInitialized = false
+            }
+        }
+
+        fun seekTo(timeUs: Long) {
+            if (!isInitialized) return
+            try {
+                extractor?.seekTo(timeUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+                decoder?.flush()
+                currentPtsUs = -1L
+                isEos = false
+            } catch (e: Exception) {
+                Log.w(TAG, "Hardware decoder seek error: ${e.message}")
+            }
+        }
+
+        fun advanceTo(targetTimeUs: Long): Boolean {
+            if (!isInitialized || decoder == null || extractor == null) return false
+            if (currentPtsUs >= targetTimeUs && currentPtsUs != -1L) {
+                return true
+            }
+
+            val timeoutUs = 2000L
+            var loops = 0
+            val maxLoops = 200
+
+            while (loops++ < maxLoops) {
+                // Feed input
+                if (!isEos) {
+                    val inIdx = decoder!!.dequeueInputBuffer(timeoutUs)
+                    if (inIdx >= 0) {
+                        val inBuf = decoder!!.getInputBuffer(inIdx)
+                        if (inBuf != null) {
+                            val size = extractor!!.readSampleData(inBuf, 0)
+                            if (size < 0) {
+                                decoder!!.queueInputBuffer(inIdx, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                                isEos = true
+                            } else {
+                                val pts = extractor!!.sampleTime
+                                decoder!!.queueInputBuffer(inIdx, 0, size, pts, 0)
+                                extractor!!.advance()
+                            }
+                        }
+                    }
+                }
+
+                // Dequeue output
+                val outIdx = decoder!!.dequeueOutputBuffer(bufferInfo, timeoutUs)
+                if (outIdx >= 0) {
+                    if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                        decoder!!.releaseOutputBuffer(outIdx, false)
+                        break
+                    }
+                    currentPtsUs = bufferInfo.presentationTimeUs
+                    val shouldRender = currentPtsUs >= targetTimeUs
+                    decoder!!.releaseOutputBuffer(outIdx, shouldRender)
+                    if (shouldRender) {
+                        surfaceTexture?.updateTexImage()
+                        surfaceTexture?.getTransformMatrix(stMatrix)
+                        return true
+                    }
+                } else if (outIdx == MediaCodec.INFO_TRY_AGAIN_LATER) {
+                    if (isEos) break
+                }
+            }
+            return currentPtsUs != -1L
+        }
+
+        fun release() {
+            try { decoder?.stop() } catch (e: Exception) {}
+            try { decoder?.release() } catch (e: Exception) {}
+            decoder = null
+            try { extractor?.release() } catch (e: Exception) {}
+            extractor = null
+            try { surface?.release() } catch (e: Exception) {}
+            surface = null
+            try { surfaceTexture?.release() } catch (e: Exception) {}
+            surfaceTexture = null
+            if (textureId != 0) {
+                val textures = intArrayOf(textureId)
+                GLES20.glDeleteTextures(1, textures, 0)
+                textureId = 0
+            }
+            isInitialized = false
+        }
+    }
+
+    /**
+     * Offscreen Framebuffer for hardware transition compositing
+     */
+    class Framebuffer(val width: Int, val height: Int) {
+        var framebufferId = 0
+            private set
+        var textureId = 0
+            private set
+
+        init {
+            val fbos = IntArray(1)
+            GLES20.glGenFramebuffers(1, fbos, 0)
+            framebufferId = fbos[0]
+
+            val textures = IntArray(1)
+            GLES20.glGenTextures(1, textures, 0)
+            textureId = textures[0]
+
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureId)
+            GLES20.glTexImage2D(
+                GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA,
+                width, height, 0,
+                GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null
+            )
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, framebufferId)
+            GLES20.glFramebufferTexture2D(
+                GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0,
+                GLES20.GL_TEXTURE_2D, textureId, 0
+            )
+
+            val status = GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER)
+            if (status != GLES20.GL_FRAMEBUFFER_COMPLETE) {
+                Log.e(TAG, "FBO initialization incomplete: $status")
+            }
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+        }
+
+        fun bind() {
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, framebufferId)
+            GLES20.glViewport(0, 0, width, height)
+        }
+
+        fun release() {
+            if (framebufferId != 0) {
+                GLES20.glDeleteFramebuffers(1, intArrayOf(framebufferId), 0)
+                framebufferId = 0
+            }
+            if (textureId != 0) {
+                GLES20.glDeleteTextures(1, intArrayOf(textureId), 0)
+                textureId = 0
+            }
+        }
+    }
+
+    /**
+     * EGL InputSurface wrapper for MediaCodec encoder and OpenGL ES 2.0 rendering
      */
     private class CodecInputSurface(val surface: Surface, val width: Int, val height: Int) {
         private var eglDisplay: EGLDisplay = EGL14.EGL_NO_DISPLAY
         private var eglContext: EGLContext = EGL14.EGL_NO_CONTEXT
         private var eglSurface: EGLSurface = EGL14.EGL_NO_SURFACE
 
-        private var program = 0
-        private var aPositionLoc = 0
-        private var aTextureCoordLoc = 0
-        private var sTextureLoc = 0
-        private var textureId = 0
-        private val vertexBuffer: FloatBuffer
+        // Shader programs
+        private var oesProgram = 0
+        private var oesPosLoc = 0
+        private var oesTexCoordLoc = 0
+        private var oesMVPLoc = 0
+        private var oesSTLoc = 0
 
-        // Quad covering [-1, 1] with texture coords mapped to Bitmap coordinates (top-left 0,0)
-        private val quadData = floatArrayOf(
-            // X, Y, U, V
-            -1.0f, -1.0f, 0.0f, 1.0f,
-             1.0f, -1.0f, 1.0f, 1.0f,
-            -1.0f,  1.0f, 0.0f, 0.0f,
-             1.0f,  1.0f, 1.0f, 0.0f
-        )
+        private var tex2DProgram = 0
+        private var tex2DPosLoc = 0
+        private var tex2DTexCoordLoc = 0
+        private var tex2DMVPLoc = 0
+        private var tex2DSTLoc = 0
+
+        private var solidProgram = 0
+        private var solidPosLoc = 0
+        private var solidMVPLoc = 0
+        private var solidColorLoc = 0
+
+        private var transProgram = 0
+        private var transPosLoc = 0
+        private var transTexCoordLoc = 0
+        private var transOutTexLoc = 0
+        private var transInTexLoc = 0
+        private var transProgressLoc = 0
+        private var transTypeLoc = 0
+
+        val projMatrix = FloatArray(16)
+        val identityMatrix = FloatArray(16)
+
+        // Quad for full screen FBO blitting
+        private val fboQuadBuffer: FloatBuffer
 
         init {
-            vertexBuffer = ByteBuffer.allocateDirect(quadData.size * 4)
-                .order(ByteOrder.nativeOrder())
-                .asFloatBuffer()
-                .put(quadData)
-            vertexBuffer.position(0)
-
             eglSetup()
             makeCurrent()
             glSetup()
+
+            Matrix.orthoM(projMatrix, 0, 0f, width.toFloat(), height.toFloat(), 0f, -1f, 1f)
+            Matrix.setIdentityM(identityMatrix, 0)
+
+            // FBO Quad: maps [-1, 1] NDC with UVs where top-left is (0, 1) and bottom-left is (0, 0)
+            val fboQuad = floatArrayOf(
+                -1.0f,  1.0f, 0.0f, 1.0f, // top-left
+                -1.0f, -1.0f, 0.0f, 0.0f, // bottom-left
+                 1.0f,  1.0f, 1.0f, 1.0f, // top-right
+                 1.0f, -1.0f, 1.0f, 0.0f  // bottom-right
+            )
+            fboQuadBuffer = ByteBuffer.allocateDirect(fboQuad.size * 4)
+                .order(ByteOrder.nativeOrder())
+                .asFloatBuffer()
+                .put(fboQuad)
+            fboQuadBuffer.position(0)
         }
 
         private fun eglSetup() {
@@ -172,7 +428,87 @@ class VideoExportEngine(private val context: Context) {
         }
 
         private fun glSetup() {
-            val vShader = """
+            // 1. OES Program
+            val oesVS = """
+                attribute vec4 aPosition;
+                attribute vec2 aTextureCoord;
+                uniform mat4 uMVPMatrix;
+                uniform mat4 uSTMatrix;
+                varying vec2 vTextureCoord;
+                void main() {
+                    gl_Position = uMVPMatrix * aPosition;
+                    vTextureCoord = (uSTMatrix * vec4(aTextureCoord, 0.0, 1.0)).xy;
+                }
+            """.trimIndent()
+
+            val oesFS = """
+                #extension GL_OES_EGL_image_external : require
+                precision mediump float;
+                varying vec2 vTextureCoord;
+                uniform samplerExternalOES sTexture;
+                void main() {
+                    gl_FragColor = texture2D(sTexture, vTextureCoord);
+                }
+            """.trimIndent()
+
+            oesProgram = createProgram(oesVS, oesFS)
+            oesPosLoc = GLES20.glGetAttribLocation(oesProgram, "aPosition")
+            oesTexCoordLoc = GLES20.glGetAttribLocation(oesProgram, "aTextureCoord")
+            oesMVPLoc = GLES20.glGetUniformLocation(oesProgram, "uMVPMatrix")
+            oesSTLoc = GLES20.glGetUniformLocation(oesProgram, "uSTMatrix")
+
+            // 2. Texture2D Program
+            val tex2DVS = """
+                attribute vec4 aPosition;
+                attribute vec2 aTextureCoord;
+                uniform mat4 uMVPMatrix;
+                uniform mat4 uSTMatrix;
+                varying vec2 vTextureCoord;
+                void main() {
+                    gl_Position = uMVPMatrix * aPosition;
+                    vTextureCoord = (uSTMatrix * vec4(aTextureCoord, 0.0, 1.0)).xy;
+                }
+            """.trimIndent()
+
+            val tex2DFS = """
+                precision mediump float;
+                varying vec2 vTextureCoord;
+                uniform sampler2D sTexture;
+                void main() {
+                    gl_FragColor = texture2D(sTexture, vTextureCoord);
+                }
+            """.trimIndent()
+
+            tex2DProgram = createProgram(tex2DVS, tex2DFS)
+            tex2DPosLoc = GLES20.glGetAttribLocation(tex2DProgram, "aPosition")
+            tex2DTexCoordLoc = GLES20.glGetAttribLocation(tex2DProgram, "aTextureCoord")
+            tex2DMVPLoc = GLES20.glGetUniformLocation(tex2DProgram, "uMVPMatrix")
+            tex2DSTLoc = GLES20.glGetUniformLocation(tex2DProgram, "uSTMatrix")
+
+            // 3. Solid Color Program
+            val solidVS = """
+                attribute vec4 aPosition;
+                uniform mat4 uMVPMatrix;
+                void main() {
+                    gl_Position = uMVPMatrix * aPosition;
+                }
+            """.trimIndent()
+
+            val solidFS = """
+                precision mediump float;
+                uniform vec4 uColor;
+                void main() {
+                    gl_FragColor = uColor;
+                }
+            """.trimIndent()
+
+            solidProgram = createProgram(solidVS, solidFS)
+            solidPosLoc = GLES20.glGetAttribLocation(solidProgram, "aPosition")
+            solidMVPLoc = GLES20.glGetUniformLocation(solidProgram, "uMVPMatrix")
+            solidColorLoc = GLES20.glGetUniformLocation(solidProgram, "uColor")
+
+            // 4. Transition Program
+            val transVS = """
                 attribute vec4 aPosition;
                 attribute vec2 aTextureCoord;
                 varying vec2 vTextureCoord;
@@ -182,37 +518,118 @@ class VideoExportEngine(private val context: Context) {
                 }
             """.trimIndent()
 
-            val fShader = """
+            val transFS = """
                 precision mediump float;
                 varying vec2 vTextureCoord;
-                uniform sampler2D sTexture;
+                uniform sampler2D uOutgoingTex;
+                uniform sampler2D uIncomingTex;
+                uniform float uProgress;
+                uniform int uType;
+
                 void main() {
-                    gl_FragColor = texture2D(sTexture, vTextureCoord);
+                    float p = clamp(uProgress, 0.0, 1.0);
+                    vec4 cOut = texture2D(uOutgoingTex, vTextureCoord);
+                    vec4 cIn = texture2D(uIncomingTex, vTextureCoord);
+
+                    if (uType == 0) { // fade
+                        gl_FragColor = mix(cOut, cIn, p);
+                    } else if (uType == 1) { // dissolve
+                        float s = p * p * (3.0 - 2.0 * p);
+                        gl_FragColor = mix(cOut, cIn, s);
+                    } else if (uType == 2) { // blackFade
+                        if (p < 0.5) {
+                            float a = clamp(1.0 - p * 2.0, 0.0, 1.0);
+                            gl_FragColor = vec4(cOut.rgb * a, 1.0);
+                        } else {
+                            float a = clamp((p - 0.5) * 2.0, 0.0, 1.0);
+                            gl_FragColor = vec4(cIn.rgb * a, 1.0);
+                        }
+                    } else if (uType == 3) { // whiteFade
+                        if (p < 0.5) {
+                            float t = clamp(p * 2.0, 0.0, 1.0);
+                            gl_FragColor = vec4(mix(cOut.rgb, vec3(1.0), t), 1.0);
+                        } else {
+                            float t = clamp((p - 0.5) * 2.0, 0.0, 1.0);
+                            gl_FragColor = vec4(mix(vec3(1.0), cIn.rgb, t), 1.0);
+                        }
+                    } else if (uType == 4) { // slideLeft
+                        if (vTextureCoord.x < (1.0 - p)) {
+                            gl_FragColor = texture2D(uOutgoingTex, vTextureCoord + vec2(p, 0.0));
+                        } else {
+                            gl_FragColor = texture2D(uIncomingTex, vTextureCoord - vec2(1.0 - p, 0.0));
+                        }
+                    } else if (uType == 5) { // slideRight
+                        if (vTextureCoord.x > p) {
+                            gl_FragColor = texture2D(uOutgoingTex, vTextureCoord - vec2(p, 0.0));
+                        } else {
+                            gl_FragColor = texture2D(uIncomingTex, vTextureCoord + vec2(1.0 - p, 0.0));
+                        }
+                    } else if (uType == 6) { // slideUp
+                        if (vTextureCoord.y < (1.0 - p)) {
+                            gl_FragColor = texture2D(uOutgoingTex, vTextureCoord + vec2(0.0, p));
+                        } else {
+                            gl_FragColor = texture2D(uIncomingTex, vTextureCoord - vec2(0.0, 1.0 - p));
+                        }
+                    } else if (uType == 7) { // slideDown
+                        if (vTextureCoord.y > p) {
+                            gl_FragColor = texture2D(uOutgoingTex, vTextureCoord - vec2(0.0, p));
+                        } else {
+                            gl_FragColor = texture2D(uIncomingTex, vTextureCoord + vec2(0.0, 1.0 - p));
+                        }
+                    } else if (uType == 8) { // wipeLeft
+                        if (vTextureCoord.x < (1.0 - p)) {
+                            gl_FragColor = cOut;
+                        } else {
+                            gl_FragColor = cIn;
+                        }
+                    } else if (uType == 9) { // wipeRight
+                        if (vTextureCoord.x > p) {
+                            gl_FragColor = cOut;
+                        } else {
+                            gl_FragColor = cIn;
+                        }
+                    } else if (uType == 10) { // zoomIn
+                        vec2 centeredIn = (vTextureCoord - 0.5) / max(p, 0.001) + 0.5;
+                        if (centeredIn.x >= 0.0 && centeredIn.x <= 1.0 && centeredIn.y >= 0.0 && centeredIn.y <= 1.0) {
+                            vec4 inC = texture2D(uIncomingTex, centeredIn);
+                            gl_FragColor = mix(cOut, inC, p);
+                        } else {
+                            gl_FragColor = cOut;
+                        }
+                    } else if (uType == 11) { // zoomOut
+                        float s = max(1.0 - p, 0.001);
+                        vec2 centeredOut = (vTextureCoord - 0.5) / s + 0.5;
+                        if (centeredOut.x >= 0.0 && centeredOut.x <= 1.0 && centeredOut.y >= 0.0 && centeredOut.y <= 1.0) {
+                            vec4 outC = texture2D(uOutgoingTex, centeredOut);
+                            gl_FragColor = mix(cIn, outC, 1.0 - p);
+                        } else {
+                            gl_FragColor = cIn;
+                        }
+                    } else {
+                        gl_FragColor = p < 0.5 ? cOut : cIn;
+                    }
                 }
             """.trimIndent()
 
-            val vertexShader = loadShader(GLES20.GL_VERTEX_SHADER, vShader)
-            val fragmentShader = loadShader(GLES20.GL_FRAGMENT_SHADER, fShader)
-
-            program = GLES20.glCreateProgram()
-            GLES20.glAttachShader(program, vertexShader)
-            GLES20.glAttachShader(program, fragmentShader)
-            GLES20.glLinkProgram(program)
-
-            aPositionLoc = GLES20.glGetAttribLocation(program, "aPosition")
-            aTextureCoordLoc = GLES20.glGetAttribLocation(program, "aTextureCoord")
-            sTextureLoc = GLES20.glGetUniformLocation(program, "sTexture")
-
-            val textures = IntArray(1)
-            GLES20.glGenTextures(1, textures, 0)
-            textureId = textures[0]
-            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureId)
-            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
-            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
-            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
-            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+            transProgram = createProgram(transVS, transFS)
+            transPosLoc = GLES20.glGetAttribLocation(transProgram, "aPosition")
+            transTexCoordLoc = GLES20.glGetAttribLocation(transProgram, "aTextureCoord")
+            transOutTexLoc = GLES20.glGetUniformLocation(transProgram, "uOutgoingTex")
+            transInTexLoc = GLES20.glGetUniformLocation(transProgram, "uIncomingTex")
+            transProgressLoc = GLES20.glGetUniformLocation(transProgram, "uProgress")
+            transTypeLoc = GLES20.glGetUniformLocation(transProgram, "uType")
 
             GLES20.glViewport(0, 0, width, height)
+        }
+
+        private fun createProgram(vShaderCode: String, fShaderCode: String): Int {
+            val vShader = loadShader(GLES20.GL_VERTEX_SHADER, vShaderCode)
+            val fShader = loadShader(GLES20.GL_FRAGMENT_SHADER, fShaderCode)
+            val prog = GLES20.glCreateProgram()
+            GLES20.glAttachShader(prog, vShader)
+            GLES20.glAttachShader(prog, fShader)
+            GLES20.glLinkProgram(prog)
+            return prog
         }
 
         private fun loadShader(type: Int, shaderCode: String): Int {
@@ -228,21 +645,99 @@ class VideoExportEngine(private val context: Context) {
             }
         }
 
-        fun drawBitmap(bitmap: Bitmap) {
-            GLES20.glUseProgram(program)
+        fun renderOESTexture(
+            textureId: Int,
+            mvpMatrix: FloatArray,
+            stMatrix: FloatArray,
+            quadBuffer: FloatBuffer
+        ) {
+            GLES20.glUseProgram(oesProgram)
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId)
 
+            GLES20.glUniformMatrix4fv(oesMVPLoc, 1, false, mvpMatrix, 0)
+            GLES20.glUniformMatrix4fv(oesSTLoc, 1, false, stMatrix, 0)
+
+            quadBuffer.position(0)
+            GLES20.glVertexAttribPointer(oesPosLoc, 2, GLES20.GL_FLOAT, false, 4 * 4, quadBuffer)
+            GLES20.glEnableVertexAttribArray(oesPosLoc)
+
+            quadBuffer.position(2)
+            GLES20.glVertexAttribPointer(oesTexCoordLoc, 2, GLES20.GL_FLOAT, false, 4 * 4, quadBuffer)
+            GLES20.glEnableVertexAttribArray(oesTexCoordLoc)
+
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+        }
+
+        fun render2DTexture(
+            textureId: Int,
+            mvpMatrix: FloatArray,
+            quadBuffer: FloatBuffer
+        ) {
+            GLES20.glUseProgram(tex2DProgram)
             GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureId)
-            GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bitmap, 0)
-            GLES20.glUniform1i(sTextureLoc, 0)
 
-            vertexBuffer.position(0)
-            GLES20.glVertexAttribPointer(aPositionLoc, 2, GLES20.GL_FLOAT, false, 4 * 4, vertexBuffer)
-            GLES20.glEnableVertexAttribArray(aPositionLoc)
+            GLES20.glUniformMatrix4fv(tex2DMVPLoc, 1, false, mvpMatrix, 0)
+            GLES20.glUniformMatrix4fv(tex2DSTLoc, 1, false, identityMatrix, 0)
 
-            vertexBuffer.position(2)
-            GLES20.glVertexAttribPointer(aTextureCoordLoc, 2, GLES20.GL_FLOAT, false, 4 * 4, vertexBuffer)
-            GLES20.glEnableVertexAttribArray(aTextureCoordLoc)
+            quadBuffer.position(0)
+            GLES20.glVertexAttribPointer(tex2DPosLoc, 2, GLES20.GL_FLOAT, false, 4 * 4, quadBuffer)
+            GLES20.glEnableVertexAttribArray(tex2DPosLoc)
+
+            quadBuffer.position(2)
+            GLES20.glVertexAttribPointer(tex2DTexCoordLoc, 2, GLES20.GL_FLOAT, false, 4 * 4, quadBuffer)
+            GLES20.glEnableVertexAttribArray(tex2DTexCoordLoc)
+
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+        }
+
+        fun renderSolidColor(
+            color: Int,
+            mvpMatrix: FloatArray,
+            quadBuffer: FloatBuffer
+        ) {
+            GLES20.glUseProgram(solidProgram)
+            val r = ((color shr 16) and 0xFF) / 255.0f
+            val g = ((color shr 8) and 0xFF) / 255.0f
+            val b = (color and 0xFF) / 255.0f
+            val a = ((color shr 24) and 0xFF) / 255.0f
+            GLES20.glUniform4f(solidColorLoc, r, g, b, if (a > 0f) a else 1f)
+            GLES20.glUniformMatrix4fv(solidMVPLoc, 1, false, mvpMatrix, 0)
+
+            quadBuffer.position(0)
+            GLES20.glVertexAttribPointer(solidPosLoc, 2, GLES20.GL_FLOAT, false, 4 * 4, quadBuffer)
+            GLES20.glEnableVertexAttribArray(solidPosLoc)
+
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+        }
+
+        fun renderTransition(
+            outgoingTexId: Int,
+            incomingTexId: Int,
+            typeIndex: Int,
+            progress: Float
+        ) {
+            GLES20.glUseProgram(transProgram)
+
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, outgoingTexId)
+            GLES20.glUniform1i(transOutTexLoc, 0)
+
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, incomingTexId)
+            GLES20.glUniform1i(transInTexLoc, 1)
+
+            GLES20.glUniform1f(transProgressLoc, progress)
+            GLES20.glUniform1i(transTypeLoc, typeIndex)
+
+            fboQuadBuffer.position(0)
+            GLES20.glVertexAttribPointer(transPosLoc, 2, GLES20.GL_FLOAT, false, 4 * 4, fboQuadBuffer)
+            GLES20.glEnableVertexAttribArray(transPosLoc)
+
+            fboQuadBuffer.position(2)
+            GLES20.glVertexAttribPointer(transTexCoordLoc, 2, GLES20.GL_FLOAT, false, 4 * 4, fboQuadBuffer)
+            GLES20.glEnableVertexAttribArray(transTexCoordLoc)
 
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
         }
@@ -270,8 +765,8 @@ class VideoExportEngine(private val context: Context) {
     }
 
     /**
-     * Executes the full video export pipeline with real frame extraction,
-     * transition compositing (all 12 types), hardware encoding, and gallery registration.
+     * Executes the full video export pipeline with hardware-accelerated decoding,
+     * GPU transform matrix compositing, 12 GPU transition shaders, and gallery registration.
      */
     fun exportVideo(
         clips: List<ExportClip>,
@@ -285,6 +780,8 @@ class VideoExportEngine(private val context: Context) {
         progressCallback: ProgressCallback?
     ): Map<String, Any> {
         require(clips.isNotEmpty()) { "Cannot export video with empty clips" }
+
+        val startTimeNs = System.nanoTime()
 
         // Align dimensions to multiples of 16 for H.264 encoder compatibility
         val width = (targetWidth / 16) * 16
@@ -301,46 +798,16 @@ class VideoExportEngine(private val context: Context) {
         }
 
         if (totalDurationMs <= 0L) {
-            totalDurationMs = 1000L // minimum 1 second safety
+            totalDurationMs = 1000L
         }
 
         val totalFrames = ((totalDurationMs / 1000.0) * fps).toInt().coerceAtLeast(1)
-        Log.i(TAG, "Export starting: ${width}x${height} @ ${fps}fps, totalDuration=${totalDurationMs}ms, frames=$totalFrames")
+        Log.i(TAG, "Hardware Export starting: ${width}x${height} @ ${fps}fps, totalDuration=${totalDurationMs}ms, frames=$totalFrames")
 
         // Prepare temporary output file
         val tempDir = File(context.cacheDir, "export_tmp").apply { if (!exists()) mkdirs() }
         val tempOutputFile = File(tempDir, "export_${System.currentTimeMillis()}.mp4")
         if (tempOutputFile.exists()) tempOutputFile.delete()
-
-        // Prepare MediaMetadataRetrievers for video clips & Bitmap cache for photos
-        val videoRetrievers = mutableMapOf<String, MediaMetadataRetriever>()
-        val photoBitmaps = mutableMapOf<String, Bitmap>()
-
-        for (clip in clips) {
-            val p = clip.path
-            if (!p.isNullOrBlank() && File(p).exists()) {
-                if (clip.isPhoto || p.endsWith(".jpg", true) || p.endsWith(".png", true) || p.endsWith(".jpeg", true)) {
-                    if (!photoBitmaps.containsKey(p)) {
-                        try {
-                            val bmp = BitmapFactory.decodeFile(p)
-                            if (bmp != null) photoBitmaps[p] = bmp
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Failed decoding photo at $p: ${e.message}")
-                        }
-                    }
-                } else {
-                    if (!videoRetrievers.containsKey(p)) {
-                        try {
-                            val r = MediaMetadataRetriever()
-                            r.setDataSource(p)
-                            videoRetrievers[p] = r
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Failed setting data source for $p: ${e.message}")
-                        }
-                    }
-                }
-            }
-        }
 
         // Configure MediaCodec Encoder
         val videoFormat = MediaFormat.createVideoFormat(MIME_TYPE, width, height).apply {
@@ -365,7 +832,8 @@ class VideoExportEngine(private val context: Context) {
         var audioTrackIndex = -1
         var audioFormat: MediaFormat? = null
 
-        val primaryAudioSource = audioTracks.firstOrNull { it.path.isNotBlank() && File(it.path).exists() }?.path
+        val primaryAudioTrack = audioTracks.firstOrNull { it.path.isNotBlank() && File(it.path).exists() }
+        val primaryAudioSource = primaryAudioTrack?.path
             ?: clips.firstOrNull { it.path != null && File(it.path).exists() && !it.isPhoto }?.path
 
         if (primaryAudioSource != null) {
@@ -384,21 +852,53 @@ class VideoExportEngine(private val context: Context) {
                 }
                 if (audioFormat == null) {
                     extractor.release()
+                } else if (primaryAudioTrack != null && primaryAudioTrack.trimStartMs > 0L) {
+                    audioExtractor?.seekTo(primaryAudioTrack.trimStartMs * 1000L, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Audio track setup skipped: ${e.message}")
             }
         }
 
-        // Compositing Bitmaps and Canvas
-        val targetBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        val targetCanvas = Canvas(targetBitmap)
+        // Texture caches
+        val photoTextures = mutableMapOf<String, Int>()
+        val photoBitmaps = mutableMapOf<String, Bitmap>()
+        val photoDimensions = mutableMapOf<String, Pair<Int, Int>>()
+        val videoDecoders = mutableMapOf<String, HardwareVideoDecoder>()
 
-        val outgoingBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        val outgoingCanvas = Canvas(outgoingBitmap)
+        // Preload photo textures
+        for (clip in clips) {
+            val p = clip.path
+            if (!p.isNullOrBlank() && File(p).exists()) {
+                if (clip.isPhoto || p.endsWith(".jpg", true) || p.endsWith(".png", true) || p.endsWith(".jpeg", true)) {
+                    if (!photoTextures.containsKey(p)) {
+                        try {
+                            val bmp = BitmapFactory.decodeFile(p)
+                            if (bmp != null) {
+                                val tex = IntArray(1)
+                                GLES20.glGenTextures(1, tex, 0)
+                                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, tex[0])
+                                GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+                                GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+                                GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+                                GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+                                GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bmp, 0)
+                                photoTextures[p] = tex[0]
+                                photoDimensions[p] = Pair(bmp.width, bmp.height)
+                                photoBitmaps[p] = bmp
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed caching photo at $p: ${e.message}")
+                        }
+                    }
+                }
+            }
+        }
 
-        val incomingBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        val incomingCanvas = Canvas(incomingBitmap)
+        // Framebuffers for transition compositing (only allocated if transitions exist)
+        val hasTransitions = transitions.any { it.enabled && it.durationMs > 0 && it.type != "none" }
+        val fboA = if (hasTransitions) Framebuffer(width, height) else null
+        val fboB = if (hasTransitions) Framebuffer(width, height) else null
 
         val bufferInfo = MediaCodec.BufferInfo()
 
@@ -407,8 +907,7 @@ class VideoExportEngine(private val context: Context) {
             while (true) {
                 val encoderStatus = encoder.dequeueOutputBuffer(bufferInfo, timeoutUs)
                 if (encoderStatus == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                    if (!endOfStream) break
-                    else break
+                    break
                 } else if (encoderStatus == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                     if (muxerStarted) {
                         throw RuntimeException("format changed twice")
@@ -446,6 +945,157 @@ class VideoExportEngine(private val context: Context) {
             }
         }
 
+        // Helper to get or create a hardware video decoder for a clip
+        fun getDecoderForClip(clip: ExportClip): HardwareVideoDecoder? {
+            val path = clip.path ?: return null
+            if (photoTextures.containsKey(path) || clip.isPhoto) return null
+            if (!File(path).exists()) return null
+
+            var dec = videoDecoders[path]
+            if (dec == null) {
+                dec = HardwareVideoDecoder(path)
+                if (dec.isInitialized) {
+                    videoDecoders[path] = dec
+                } else {
+                    dec.release()
+                    return null
+                }
+            }
+            return dec
+        }
+
+        // Helper to render a clip onto whichever framebuffer is currently bound
+        fun renderClip(clip: ExportClip, localTimeMs: Long) {
+            val path = clip.path
+            val decoder = if (!clip.isPhoto && path != null) getDecoderForClip(clip) else null
+
+            // 1. Calculate transform matrices
+            val centerX = width / 2f
+            val centerY = height / 2f
+            val kCanvas = width.toFloat() / 360f
+            val xExport = clip.safeXPos.toFloat() * kCanvas
+            val yExport = clip.safeYPos.toFloat() * kCanvas
+            val s = clip.safeScale.toFloat()
+            val scaleX = (if (clip.flipHorizontal) -1f else 1f) * s
+            val scaleY = (if (clip.flipVertical) -1f else 1f) * s
+            val continuousDeg = (clip.safeRotationAngle.toFloat() * 180f / Math.PI.toFloat())
+            val totalRotationDeg = clip.rotationDegrees.toFloat() + continuousDeg
+
+            val modelMatrix = FloatArray(16)
+            Matrix.setIdentityM(modelMatrix, 0)
+            Matrix.translateM(modelMatrix, 0, centerX + xExport, centerY + yExport, 0f)
+            Matrix.rotateM(modelMatrix, 0, totalRotationDeg, 0f, 0f, 1f)
+            Matrix.scaleM(modelMatrix, 0, scaleX, scaleY, 1f)
+            Matrix.translateM(modelMatrix, 0, -centerX, -centerY, 0f)
+
+            val mvpMatrix = FloatArray(16)
+            Matrix.multiplyMM(mvpMatrix, 0, inputSurface.projMatrix, 0, modelMatrix, 0)
+
+            // Determine dimensions and aspect ratio
+            var contentW = width
+            var contentH = height
+            var isVideo = false
+            var isPhoto = false
+
+            if (decoder != null && decoder.isInitialized) {
+                isVideo = true
+                decoder.advanceTo(localTimeMs * 1000L)
+                val rot = decoder.videoRotation
+                if (rot == 90 || rot == 270) {
+                    contentW = decoder.videoHeight
+                    contentH = decoder.videoWidth
+                } else {
+                    contentW = decoder.videoWidth
+                    contentH = decoder.videoHeight
+                }
+            } else if (path != null && photoTextures.containsKey(path)) {
+                isPhoto = true
+                val dim = photoDimensions[path] ?: Pair(width, height)
+                contentW = dim.first
+                contentH = dim.second
+            }
+
+            // Calculate dstRect aspect fit
+            val frameRatio = contentW.toFloat() / contentH.toFloat()
+            val targetRatio = width.toFloat() / height.toFloat()
+            val dstLeft: Float
+            val dstTop: Float
+            val dstRight: Float
+            val dstBottom: Float
+
+            if (frameRatio > targetRatio) {
+                val drawH = width / frameRatio
+                val top = (height - drawH) / 2f
+                dstLeft = 0f
+                dstTop = top
+                dstRight = width.toFloat()
+                dstBottom = top + drawH
+            } else {
+                val drawW = height * frameRatio
+                val left = (width - drawW) / 2f
+                dstLeft = left
+                dstTop = 0f
+                dstRight = left + drawW
+                dstBottom = height.toFloat()
+            }
+
+            // Build quad buffer for dstRect
+            val quadData = floatArrayOf(
+                dstLeft,  dstTop,    0.0f, 0.0f, // top-left
+                dstLeft,  dstBottom, 0.0f, 1.0f, // bottom-left
+                dstRight, dstTop,    1.0f, 0.0f, // top-right
+                dstRight, dstBottom, 1.0f, 1.0f  // bottom-right
+            )
+            val quadBuffer = ByteBuffer.allocateDirect(quadData.size * 4)
+                .order(ByteOrder.nativeOrder())
+                .asFloatBuffer()
+                .put(quadData)
+            quadBuffer.position(0)
+
+            if (isVideo && decoder != null) {
+                inputSurface.renderOESTexture(decoder.textureId, mvpMatrix, decoder.stMatrix, quadBuffer)
+            } else if (isPhoto && path != null && photoTextures.containsKey(path)) {
+                val tex = photoTextures[path] ?: 0
+                inputSurface.render2DTexture(tex, mvpMatrix, quadBuffer)
+            } else {
+                // Render solid placeholder quad
+                val fullQuadData = floatArrayOf(
+                    0f,            0f,             0.0f, 0.0f,
+                    0f,            height.toFloat(), 0.0f, 1.0f,
+                    width.toFloat(), 0f,             1.0f, 0.0f,
+                    width.toFloat(), height.toFloat(), 1.0f, 1.0f
+                )
+                val fullQuadBuffer = ByteBuffer.allocateDirect(fullQuadData.size * 4)
+                    .order(ByteOrder.nativeOrder())
+                    .asFloatBuffer()
+                    .put(fullQuadData)
+                fullQuadBuffer.position(0)
+                inputSurface.renderSolidColor(clip.color, mvpMatrix, fullQuadBuffer)
+            }
+        }
+
+        fun transitionTypeToIndex(type: String): Int {
+            return when (type) {
+                "fade" -> 0
+                "dissolve" -> 1
+                "blackFade" -> 2
+                "whiteFade" -> 3
+                "slideLeft" -> 4
+                "slideRight" -> 5
+                "slideUp" -> 6
+                "slideDown" -> 7
+                "wipeLeft" -> 8
+                "wipeRight" -> 9
+                "zoomIn" -> 10
+                "zoomOut" -> 11
+                else -> 0
+            }
+        }
+
+        var totalDecodeNs = 0L
+        var totalRenderNs = 0L
+        var totalDrainNs = 0L
+
         try {
             val frameDurationMs = 1000.0 / fps
             for (frameIndex in 0 until totalFrames) {
@@ -481,37 +1131,38 @@ class VideoExportEngine(private val context: Context) {
                     }
                 }
 
-                // 2. Render Frame
-                targetCanvas.drawColor(Color.BLACK)
+                val renderStart = System.nanoTime()
 
-                if (activeTransition != null && leftClipIndex != -1 && rightClipIndex != -1) {
-                    // Transition Compositing
+                // 2. Render Frame (Hardware Compositing)
+                if (activeTransition != null && leftClipIndex != -1 && rightClipIndex != -1 && fboA != null && fboB != null) {
                     val leftClip = clips[leftClipIndex]
                     val rightClip = clips[rightClipIndex]
 
                     val leftLocalMs = ((currentTimeMs - clipStartTimes[leftClipIndex]) * leftClip.speed + leftClip.trimStartMs).toLong()
                     val rightLocalMs = ((currentTimeMs - clipStartTimes[rightClipIndex]) * rightClip.speed + rightClip.trimStartMs).toLong().coerceAtLeast(rightClip.trimStartMs)
 
-                    val leftFrame = getClipBitmap(leftClip, leftLocalMs, videoRetrievers, photoBitmaps)
-                    val rightFrame = getClipBitmap(rightClip, rightLocalMs, videoRetrievers, photoBitmaps)
+                    // Render Outgoing to FBO A
+                    fboA.bind()
+                    GLES20.glClearColor(0f, 0f, 0f, 1f)
+                    GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+                    renderClip(leftClip, leftLocalMs)
 
-                    outgoingCanvas.drawColor(Color.BLACK)
-                    drawClipToCanvas(outgoingCanvas, leftClip, leftFrame, width, height)
+                    // Render Incoming to FBO B
+                    fboB.bind()
+                    GLES20.glClearColor(0f, 0f, 0f, 1f)
+                    GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+                    renderClip(rightClip, rightLocalMs)
 
-                    incomingCanvas.drawColor(Color.BLACK)
-                    drawClipToCanvas(incomingCanvas, rightClip, rightFrame, width, height)
+                    // Composite via Transition Shader to Encoder Surface
+                    GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+                    GLES20.glViewport(0, 0, width, height)
+                    GLES20.glClearColor(0f, 0f, 0f, 1f)
+                    GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
 
-                    compositeTransition(
-                        targetCanvas,
-                        outgoingBitmap,
-                        incomingBitmap,
-                        activeTransition.type,
-                        transitionProgress.toFloat(),
-                        width,
-                        height
-                    )
+                    val typeIdx = transitionTypeToIndex(activeTransition.type)
+                    inputSurface.renderTransition(fboA.textureId, fboB.textureId, typeIdx, transitionProgress.toFloat())
                 } else {
-                    // Single Clip Frame
+                    // Single Clip Frame - Direct Render to Encoder Surface (Zero FBO overhead)
                     var activeClipIndex = 0
                     for (i in clips.indices) {
                         val clipStart = clipStartTimes[i]
@@ -523,18 +1174,27 @@ class VideoExportEngine(private val context: Context) {
                     }
                     val clip = clips[activeClipIndex]
                     val localMs = ((currentTimeMs - clipStartTimes[activeClipIndex]) * clip.speed + clip.trimStartMs).toLong()
-                    val frame = getClipBitmap(clip, localMs, videoRetrievers, photoBitmaps)
-                    drawClipToCanvas(targetCanvas, clip, frame, width, height)
+
+                    GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+                    GLES20.glViewport(0, 0, width, height)
+                    GLES20.glClearColor(0f, 0f, 0f, 1f)
+                    GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+
+                    renderClip(clip, localMs)
                 }
 
-                // 3. Submit Frame to EGL surface & MediaCodec
-                inputSurface.makeCurrent()
-                inputSurface.drawBitmap(targetBitmap)
+                val renderDone = System.nanoTime()
+                totalRenderNs += (renderDone - renderStart)
+
+                // 3. Submit Frame to MediaCodec
                 val ptsNs = (frameIndex * (1_000_000_000L / fps))
                 inputSurface.setPresentationTime(ptsNs)
                 inputSurface.swapBuffers()
 
+                val drainStart = System.nanoTime()
                 drainEncoder(false)
+                val drainDone = System.nanoTime()
+                totalDrainNs += (drainDone - drainStart)
 
                 // Report progress
                 if (frameIndex % max(1, totalFrames / 20) == 0 || frameIndex == totalFrames - 1) {
@@ -566,7 +1226,7 @@ class VideoExportEngine(private val context: Context) {
                         }
                         audioBufferInfo.presentationTimeUs = audioExtractor.sampleTime
                         if (audioBufferInfo.presentationTimeUs > totalDurationMs * 1000L) {
-                            break // Reached timeline end
+                            break
                         }
                         audioBufferInfo.flags = audioExtractor.sampleFlags
                         muxer.writeSampleData(audioTrackIndex, audioBuffer, audioBufferInfo)
@@ -578,6 +1238,20 @@ class VideoExportEngine(private val context: Context) {
             }
 
             progressCallback?.onProgress(0.95)
+
+            val elapsedSec = (System.nanoTime() - startTimeNs) / 1_000_000_000.0
+            val effectiveFps = totalFrames / elapsedSec
+            val realtimeFactor = (totalDurationMs / 1000.0) / elapsedSec
+            Log.i(
+                TAG,
+                "Hardware Export COMPLETED in %.2fs. Effective FPS: %.2f (%.2fx realtime). Render avg: %.2fms, Drain avg: %.2fms".format(
+                    elapsedSec,
+                    effectiveFps,
+                    realtimeFactor,
+                    (totalRenderNs / totalFrames) / 1_000_000.0,
+                    (totalDrainNs / totalFrames) / 1_000_000.0
+                )
+            )
 
         } finally {
             // Clean up encoder and surfaces
@@ -593,11 +1267,17 @@ class VideoExportEngine(private val context: Context) {
             try { encoder.release() } catch (e: Exception) {}
             try { inputSurface.release() } catch (e: Exception) {}
             try { audioExtractor?.release() } catch (e: Exception) {}
-            videoRetrievers.values.forEach { try { it.release() } catch (e: Exception) {} }
+            videoDecoders.values.forEach { it.release() }
+            videoDecoders.clear()
+            photoTextures.values.forEach { tex ->
+                val textures = intArrayOf(tex)
+                GLES20.glDeleteTextures(1, textures, 0)
+            }
+            photoTextures.clear()
             photoBitmaps.values.forEach { try { it.recycle() } catch (e: Exception) {} }
-            targetBitmap.recycle()
-            outgoingBitmap.recycle()
-            incomingBitmap.recycle()
+            photoBitmaps.clear()
+            fboA?.release()
+            fboB?.release()
         }
 
         if (!tempOutputFile.exists() || tempOutputFile.length() == 0L) {
@@ -618,242 +1298,11 @@ class VideoExportEngine(private val context: Context) {
         )
     }
 
-    private fun getClipBitmap(
-        clip: ExportClip,
-        timeMs: Long,
-        videoRetrievers: Map<String, MediaMetadataRetriever>,
-        photoBitmaps: Map<String, Bitmap>
-    ): Bitmap? {
-        val path = clip.path ?: return null
-        if (photoBitmaps.containsKey(path)) {
-            return photoBitmaps[path]
-        }
-        val retriever = videoRetrievers[path] ?: return null
-        return try {
-            val timeUs = (timeMs * 1000L).coerceAtLeast(0L)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-                retriever.getScaledFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST, 1280, 720)
-                    ?: retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST)
-            } else {
-                retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST)
-            }
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    private fun drawClipToCanvas(
-        canvas: Canvas,
-        clip: ExportClip,
-        frame: Bitmap?,
-        width: Int,
-        height: Int
-    ) {
-        val centerX = width / 2f
-        val centerY = height / 2f
-
-        // Kcanvas is the uniform ratio between export canvas dimensions and preview reference canvas (width: 360)
-        val kCanvas = width.toFloat() / 360f
-        val xExport = clip.safeXPos.toFloat() * kCanvas
-        val yExport = clip.safeYPos.toFloat() * kCanvas
-
-        val s = clip.safeScale.toFloat()
-        val scaleX = (if (clip.flipHorizontal) -1f else 1f) * s
-        val scaleY = (if (clip.flipVertical) -1f else 1f) * s
-
-        val continuousDeg = (clip.safeRotationAngle.toFloat() * 180f / Math.PI.toFloat())
-        val totalRotationDeg = clip.rotationDegrees.toFloat() + continuousDeg
-
-        canvas.save()
-        canvas.translate(centerX + xExport, centerY + yExport)
-        canvas.rotate(totalRotationDeg)
-        canvas.scale(scaleX, scaleY)
-        canvas.translate(-centerX, -centerY)
-
-        if (frame != null && !frame.isRecycled) {
-            val srcRect = Rect(0, 0, frame.width, frame.height)
-            val frameRatio = frame.width.toFloat() / frame.height.toFloat()
-            val targetRatio = width.toFloat() / height.toFloat()
-
-            val dstRect: Rect
-            if (frameRatio > targetRatio) {
-                val drawH = (width / frameRatio).toInt()
-                val top = (height - drawH) / 2
-                dstRect = Rect(0, top, width, top + drawH)
-            } else {
-                val drawW = (height * frameRatio).toInt()
-                val left = (width - drawW) / 2
-                dstRect = Rect(left, 0, left + drawW, height)
-            }
-
-            canvas.drawBitmap(frame, srcRect, dstRect, null)
-        } else {
-            // Draw placeholder vibrant graphic
-            val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-            val shader = LinearGradient(
-                0f, 0f, width.toFloat(), height.toFloat(),
-                clip.color,
-                0xFF1A1A2E.toInt(),
-                Shader.TileMode.CLAMP
-            )
-            paint.shader = shader
-            canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
-
-            paint.shader = null
-            paint.color = Color.WHITE
-            paint.textSize = (height * 0.05f).coerceAtLeast(24f)
-            paint.textAlign = Paint.Align.CENTER
-            canvas.drawText(clip.title, width / 2f, height / 2f, paint)
-        }
-        canvas.restore()
-    }
-
-    /**
-     * Composites outgoing and incoming frames for all 12 transition types
-     */
-    private fun compositeTransition(
-        canvas: Canvas,
-        outgoing: Bitmap,
-        incoming: Bitmap,
-        type: String,
-        progress: Float,
-        width: Int,
-        height: Int
-    ) {
-        val p = progress.coerceIn(0.0f, 1.0f)
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-
-        when (type) {
-            "fade" -> {
-                paint.alpha = ((1.0f - p) * 255).toInt()
-                canvas.drawBitmap(outgoing, 0f, 0f, paint)
-                paint.alpha = (p * 255).toInt()
-                canvas.drawBitmap(incoming, 0f, 0f, paint)
-            }
-            "dissolve" -> {
-                val smooth = p * p * (3.0f - 2.0f * p)
-                paint.alpha = ((1.0f - smooth) * 255).toInt()
-                canvas.drawBitmap(outgoing, 0f, 0f, paint)
-                paint.alpha = (smooth * 255).toInt()
-                canvas.drawBitmap(incoming, 0f, 0f, paint)
-            }
-            "blackFade" -> {
-                canvas.drawColor(Color.BLACK)
-                if (p < 0.5f) {
-                    val outAlpha = (1.0f - p * 2.0f).coerceIn(0.0f, 1.0f)
-                    paint.alpha = (outAlpha * 255).toInt()
-                    canvas.drawBitmap(outgoing, 0f, 0f, paint)
-                } else {
-                    val inAlpha = ((p - 0.5f) * 2.0f).coerceIn(0.0f, 1.0f)
-                    paint.alpha = (inAlpha * 255).toInt()
-                    canvas.drawBitmap(incoming, 0f, 0f, paint)
-                }
-            }
-            "whiteFade" -> {
-                canvas.drawColor(Color.WHITE)
-                if (p < 0.5f) {
-                    val outAlpha = (1.0f - p * 2.0f).coerceIn(0.0f, 1.0f)
-                    paint.alpha = (outAlpha * 255).toInt()
-                    canvas.drawBitmap(outgoing, 0f, 0f, paint)
-                } else {
-                    val inAlpha = ((p - 0.5f) * 2.0f).coerceIn(0.0f, 1.0f)
-                    paint.alpha = (inAlpha * 255).toInt()
-                    canvas.drawBitmap(incoming, 0f, 0f, paint)
-                }
-            }
-            "slideLeft" -> {
-                canvas.save()
-                canvas.translate(-p * width, 0f)
-                canvas.drawBitmap(outgoing, 0f, 0f, null)
-                canvas.restore()
-
-                canvas.save()
-                canvas.translate((1.0f - p) * width, 0f)
-                canvas.drawBitmap(incoming, 0f, 0f, null)
-                canvas.restore()
-            }
-            "slideRight" -> {
-                canvas.save()
-                canvas.translate(p * width, 0f)
-                canvas.drawBitmap(outgoing, 0f, 0f, null)
-                canvas.restore()
-
-                canvas.save()
-                canvas.translate((p - 1.0f) * width, 0f)
-                canvas.drawBitmap(incoming, 0f, 0f, null)
-                canvas.restore()
-            }
-            "slideUp" -> {
-                canvas.save()
-                canvas.translate(0f, -p * height)
-                canvas.drawBitmap(outgoing, 0f, 0f, null)
-                canvas.restore()
-
-                canvas.save()
-                canvas.translate(0f, (1.0f - p) * height)
-                canvas.drawBitmap(incoming, 0f, 0f, null)
-                canvas.restore()
-            }
-            "slideDown" -> {
-                canvas.save()
-                canvas.translate(0f, p * height)
-                canvas.drawBitmap(outgoing, 0f, 0f, null)
-                canvas.restore()
-
-                canvas.save()
-                canvas.translate(0f, (p - 1.0f) * height)
-                canvas.drawBitmap(incoming, 0f, 0f, null)
-                canvas.restore()
-            }
-            "wipeLeft" -> {
-                canvas.drawBitmap(outgoing, 0f, 0f, null)
-                val clipLeft = width * (1.0f - p)
-                canvas.save()
-                canvas.clipRect(clipLeft, 0f, width.toFloat(), height.toFloat())
-                canvas.drawBitmap(incoming, 0f, 0f, null)
-                canvas.restore()
-            }
-            "wipeRight" -> {
-                canvas.drawBitmap(outgoing, 0f, 0f, null)
-                val clipRight = width * p
-                canvas.save()
-                canvas.clipRect(0f, 0f, clipRight, height.toFloat())
-                canvas.drawBitmap(incoming, 0f, 0f, null)
-                canvas.restore()
-            }
-            "zoomIn" -> {
-                canvas.drawBitmap(outgoing, 0f, 0f, null)
-                val s = p.coerceIn(0.01f, 1.0f)
-                canvas.save()
-                canvas.scale(s, s, width / 2f, height / 2f)
-                paint.alpha = (p * 255).toInt()
-                canvas.drawBitmap(incoming, 0f, 0f, paint)
-                canvas.restore()
-            }
-            "zoomOut" -> {
-                canvas.drawBitmap(incoming, 0f, 0f, null)
-                val s = (1.0f - p).coerceIn(0.01f, 1.0f)
-                canvas.save()
-                canvas.scale(s, s, width / 2f, height / 2f)
-                paint.alpha = ((1.0f - p) * 255).toInt()
-                canvas.drawBitmap(outgoing, 0f, 0f, paint)
-                canvas.restore()
-            }
-            else -> {
-                if (p < 0.5f) {
-                    canvas.drawBitmap(outgoing, 0f, 0f, null)
-                } else {
-                    canvas.drawBitmap(incoming, 0f, 0f, null)
-                }
-            }
-        }
-    }
-
     private fun registerToMediaStore(sourceFile: File, customName: String?): Map<String, String> {
         val displayName = if (!customName.isNullOrBlank()) {
             if (customName.endsWith(".mp4")) customName else "$customName.mp4"
         } else {
-            "MAHMAS_${System.currentTimeMillis()}.mp4"
+            "EDITOR_FS_${System.currentTimeMillis()}.mp4"
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -861,7 +1310,7 @@ class VideoExportEngine(private val context: Context) {
                 put(MediaStore.Video.Media.DISPLAY_NAME, displayName)
                 put(MediaStore.Video.Media.TITLE, displayName.removeSuffix(".mp4"))
                 put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-                put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/MahmasStudio")
+                put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/EditorFS")
                 put(MediaStore.Video.Media.DATE_ADDED, System.currentTimeMillis() / 1000)
                 put(MediaStore.Video.Media.DATE_TAKEN, System.currentTimeMillis())
                 put(MediaStore.Video.Media.IS_PENDING, 1)
@@ -888,7 +1337,7 @@ class VideoExportEngine(private val context: Context) {
             )
         } else {
             val moviesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES)
-            val targetDir = File(moviesDir, "MahmasStudio").apply { if (!exists()) mkdirs() }
+            val targetDir = File(moviesDir, "EditorFS").apply { if (!exists()) mkdirs() }
             val targetFile = File(targetDir, displayName)
 
             sourceFile.inputStream().use { input ->
