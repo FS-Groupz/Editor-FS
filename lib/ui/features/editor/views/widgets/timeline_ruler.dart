@@ -54,14 +54,30 @@ class _TimelineRulerPainter extends CustomPainter {
       ..color = AppColors.timelineRulerTick.withValues(alpha: 0.4)
       ..strokeWidth = 0.8;
 
-    // Interval between major ticks (seconds)
+    // Interval between major ticks (seconds) and sub-ticks (frame precision)
     double majorInterval = 1.0;
+    int subDivisions = 5;
+    bool isFrameMode = false;
+
     if (pixelsPerSecond < 30) {
       majorInterval = 5.0;
+      subDivisions = 5;
     } else if (pixelsPerSecond < 60) {
       majorInterval = 2.0;
-    } else {
+      subDivisions = 4;
+    } else if (pixelsPerSecond < 180) {
       majorInterval = 1.0;
+      subDivisions = 5;
+    } else if (pixelsPerSecond < 350) {
+      // 10-frame intervals (~0.33s), sub-tick per single frame
+      majorInterval = 10 / 30.0;
+      subDivisions = 10;
+      isFrameMode = true;
+    } else {
+      // Maximum zoom: 5-frame intervals (~0.16s), sub-tick per single frame
+      majorInterval = 5 / 30.0;
+      subDivisions = 5;
+      isFrameMode = true;
     }
 
     final totalSeconds = totalDuration.ceil();
@@ -70,14 +86,21 @@ class _TimelineRulerPainter extends CustomPainter {
 
       // Draw Major Tick
       canvas.drawLine(
-        Offset(x, size.height - 10),
+        Offset(x, size.height - (isFrameMode ? 12 : 10)),
         Offset(x, size.height),
         tickPaint,
       );
 
-      // Draw Time Text
-      final timeStr = TimeFormatter.formatRulerTick(sec);
-      final textSpan = TextSpan(text: timeStr, style: AppTypography.rulerTick);
+      // Draw Time Text (frames at high zoom, seconds at standard zoom)
+      final timeStr = isFrameMode
+          ? TimeFormatter.formatRulerFrameTick(sec)
+          : TimeFormatter.formatRulerTick(sec);
+      final textSpan = TextSpan(
+        text: timeStr,
+        style: isFrameMode
+            ? AppTypography.rulerTick.copyWith(fontSize: 8.5, color: AppColors.primary)
+            : AppTypography.rulerTick,
+      );
       final textPainter = TextPainter(
         text: textSpan,
         textDirection: TextDirection.ltr,
@@ -85,14 +108,14 @@ class _TimelineRulerPainter extends CustomPainter {
 
       textPainter.paint(canvas, Offset(x + 3, 2));
 
-      // Draw Sub Ticks (4 divisions per major interval)
-      final subInterval = majorInterval / 5;
-      for (int i = 1; i < 5; i++) {
+      // Draw Sub Ticks (frame divisions)
+      final subInterval = majorInterval / subDivisions;
+      for (int i = 1; i < subDivisions; i++) {
         final subSec = sec + (i * subInterval);
         final subX = subSec * pixelsPerSecond;
         if (subX <= size.width) {
           canvas.drawLine(
-            Offset(subX, size.height - 5),
+            Offset(subX, size.height - (isFrameMode ? 6 : 5)),
             Offset(subX, size.height),
             subTickPaint,
           );

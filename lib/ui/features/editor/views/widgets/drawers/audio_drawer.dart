@@ -24,9 +24,6 @@ class AudioDrawer extends StatefulWidget {
 
 class _AudioDrawerState extends State<AudioDrawer> with SingleTickerProviderStateMixin {
   late TabController _tabController;
-  bool _isRecording = false;
-  int _recordSeconds = 0;
-  Timer? _recordTimer;
   final TextEditingController _sfxSearchController = TextEditingController();
 
   @override
@@ -38,7 +35,6 @@ class _AudioDrawerState extends State<AudioDrawer> with SingleTickerProviderStat
 
   @override
   void dispose() {
-    _recordTimer?.cancel();
     _sfxSearchController.dispose();
     AssetLibraryService.instance.stopPreview();
     _tabController.dispose();
@@ -221,28 +217,10 @@ class _AudioDrawerState extends State<AudioDrawer> with SingleTickerProviderStat
   }
 
   void _toggleRecording() {
-    if (_isRecording) {
-      _recordTimer?.cancel();
-      setState(() {
-        _isRecording = false;
-      });
-      final recordedSec = math.max(2, _recordSeconds);
-      _addMusic(
-        'Voiceover Recording (${recordedSec}s)',
-        recordedSec,
-        assetId: 'voiceover_${DateTime.now().millisecondsSinceEpoch}',
-        artist: 'Voice Memo',
-      );
+    if (widget.viewModel.isRecordingVoice) {
+      widget.viewModel.stopVoiceRecording();
     } else {
-      setState(() {
-        _isRecording = true;
-        _recordSeconds = 0;
-      });
-      _recordTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-        setState(() {
-          _recordSeconds++;
-        });
-      });
+      widget.viewModel.startVoiceRecording();
     }
   }
 
@@ -478,21 +456,21 @@ class _AudioDrawerState extends State<AudioDrawer> with SingleTickerProviderStat
                             onTap: _toggleRecording,
                             child: AnimatedContainer(
                               duration: const Duration(milliseconds: 200),
-                              width: _isRecording ? 60 : 50,
-                              height: _isRecording ? 60 : 50,
+                              width: widget.viewModel.isRecordingVoice ? 64 : 52,
+                              height: widget.viewModel.isRecordingVoice ? 64 : 52,
                               decoration: BoxDecoration(
-                                color: _isRecording ? AppColors.error : AppColors.secondary,
+                                color: widget.viewModel.isRecordingVoice ? AppColors.error : AppColors.secondary,
                                 shape: BoxShape.circle,
                                 boxShadow: [
                                   BoxShadow(
-                                    color: (_isRecording ? AppColors.error : AppColors.secondary).withValues(alpha: 0.4),
+                                    color: (widget.viewModel.isRecordingVoice ? AppColors.error : AppColors.secondary).withValues(alpha: 0.4),
                                     blurRadius: 12,
                                     spreadRadius: 2,
                                   ),
                                 ],
                               ),
                               child: Icon(
-                                _isRecording ? Icons.stop_rounded : Icons.mic_rounded,
+                                widget.viewModel.isRecordingVoice ? Icons.stop_rounded : Icons.mic_rounded,
                                 color: Colors.white,
                                 size: 28,
                               ),
@@ -500,11 +478,13 @@ class _AudioDrawerState extends State<AudioDrawer> with SingleTickerProviderStat
                           ),
                           const SizedBox(height: 8),
                           Text(
-                            _isRecording ? 'Recording: ${_recordSeconds}s (Tap to Stop)' : 'Tap Mic to Record Voiceover',
+                            widget.viewModel.isRecordingVoice
+                                ? 'Recording: ${widget.viewModel.currentRecordingSeconds.toStringAsFixed(1)}s (Tap to Stop)'
+                                : 'Tap Mic to Record Voiceover',
                             style: TextStyle(
                               fontSize: 11,
                               fontWeight: FontWeight.bold,
-                              color: _isRecording ? AppColors.error : AppColors.textSecondary,
+                              color: widget.viewModel.isRecordingVoice ? AppColors.error : AppColors.textSecondary,
                             ),
                           ),
                         ],

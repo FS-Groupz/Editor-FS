@@ -32,6 +32,13 @@ class AudioTrackItem extends StatelessWidget {
       height: AppDimensions.audioTrackHeight,
       child: GestureDetector(
         onTap: () => viewModel.selectAudioTrack(audioTrack.id),
+        onTapDown: (details) {
+          if (viewModel.isPlaying) viewModel.pause();
+          viewModel.selectAudioTrack(audioTrack.id);
+          final targetTime = (audioTrack.startTimeInSeconds + (details.localPosition.dx / pixelsPerSecond))
+              .clamp(0.0, viewModel.totalDurationInSeconds);
+          viewModel.seekTo(targetTime);
+        },
         onHorizontalDragUpdate: (details) {
           // Middle drag: slide audio track position across timeline
           final deltaSeconds = details.primaryDelta! / pixelsPerSecond;

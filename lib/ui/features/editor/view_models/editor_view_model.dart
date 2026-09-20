@@ -1,8 +1,11 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:capcut_video_editor/domain/models/keyframe.dart';
+import 'package:capcut_video_editor/domain/models/video_mask.dart';
 import 'package:capcut_video_editor/core/constants/app_dimensions.dart';
 import 'package:capcut_video_editor/core/services/asset_storage_service.dart';
 import 'package:capcut_video_editor/core/services/audio_playback_service.dart';
@@ -23,6 +26,7 @@ import 'package:capcut_video_editor/domain/models/sticker_item.dart';
 import 'package:capcut_video_editor/domain/models/text_overlay.dart';
 import 'package:capcut_video_editor/domain/models/clip_spatial_transform.dart';
 import 'package:capcut_video_editor/domain/models/video_clip.dart';
+import 'package:capcut_video_editor/domain/models/speed_curve.dart';
 import 'package:capcut_video_editor/domain/models/video_effect.dart';
 import 'package:capcut_video_editor/core/services/project_storage_service.dart';
 import 'package:capcut_video_editor/data/repositories/mock_media_repository.dart';
@@ -77,13 +81,33 @@ class _EditorSnapshot {
 /// Comprehensive ViewModel managing the Editor FS video editor state, timeline playback,
 /// universal multi-track trimming and dragging, undo/redo history, and export.
 class EditorViewModel extends ChangeNotifier {
-  EditorViewModel({Project? initialProject}) {
+  /// Controls whether blank initializations load mock sample clips from [MockMediaRepository].
+  /// Strictly restricted to test environments; in production, this is strictly false.
+  final bool enableMockFallback;
+
+  /// Global default for [enableMockFallback]. In production, this is false.
+  /// Automatically enabled for automated test fixtures.
+  static bool defaultEnableMockFallback = !kReleaseMode && !kIsWeb && Platform.environment.containsKey('FLUTTER_TEST');
+
+  EditorViewModel({
+    Project? initialProject,
+    bool? enableMockFallback,
+  }) : enableMockFallback = enableMockFallback ?? defaultEnableMockFallback {
     _initVideoPlaybackSubscription();
     if (initialProject != null) {
       loadProject(initialProject);
     } else {
       _initializeProject();
     }
+    _ensureAssetThumbnails();
+  }
+
+  /// Factory constructor for test fixtures requiring pre-populated mock media
+  factory EditorViewModel.forTesting({Project? initialProject}) {
+    return EditorViewModel(
+      initialProject: initialProject,
+      enableMockFallback: true,
+    );
   }
 
   StreamSubscription<VideoPositionEvent>? _videoPositionSubscription;
@@ -297,6 +321,13 @@ class EditorViewModel extends ChangeNotifier {
 
   String? get selectedClipId => selectedClip?.id;
 
+  double get selectedClipStartTime {
+    if (_selectedClipIndex != null && _selectedClipIndex! >= 0 && _selectedClipIndex! < _videoClips.length) {
+      return getClipStartTime(_selectedClipIndex!);
+    }
+    return 0.0;
+  }
+
   OverlayClip? get selectedOverlay =>
       (_selectedOverlayIndex != null && _selectedOverlayIndex! >= 0 && _selectedOverlayIndex! < _overlayClips.length)
           ? _overlayClips[_selectedOverlayIndex!]
@@ -457,12 +488,18 @@ class EditorViewModel extends ChangeNotifier {
       createdAt: now,
       updatedAt: now,
     );
-    _videoClips = MockMediaRepository.getInitialVideoClips();
+    if (enableMockFallback) {
+      _videoClips = MockMediaRepository.getInitialVideoClips();
+      _textOverlays = MockMediaRepository.getInitialTextOverlays();
+      _selectedClipIndex = 0;
+    } else {
+      _videoClips = [];
+      _textOverlays = [];
+      _selectedClipIndex = null;
+    }
     _audioTracks = [];
-    _textOverlays = MockMediaRepository.getInitialTextOverlays();
     _overlayClips = [];
     _stickerOverlays = [];
-    _selectedClipIndex = 0;
     _selectedAudioTrackId = null;
     _isAudioSelected = false;
     _playheadPosition = 0.0;
@@ -518,6 +555,7 @@ class EditorViewModel extends ChangeNotifier {
     }
     
     notifyListeners();
+    _ensureAssetThumbnails();
   }
 
   /// Renames the active draft project
@@ -562,7 +600,11 @@ class EditorViewModel extends ChangeNotifier {
           ? getAssetById(_videoClips.first.assetId)?.thumbnailPath
           : null,
     );
-    await ProjectStorageService.instance.saveProject(_currentProject);
+    try {
+      await ProjectStorageService.instance.saveProject(_currentProject);
+    } catch (e, st) {
+      debugPrint('[EditorViewModel] saveCurrentProject error: $e\n$st');
+    }
   }
 
   // --- History Management (Undo / Redo) ---
@@ -1349,7 +1391,34 @@ class EditorViewModel extends ChangeNotifier {
     _mediaLibrary.add(asset);
     TtsService.announce('Imported ${asset.displayName}');
     notifyListeners();
+    _ensureAssetThumbnails();
     return true;
+  }
+
+  /// Asynchronously generates thumbnails on Windows for any video assets in the library that lack one,
+  /// updating the timeline and preview widgets automatically when ready.
+  Future<void> _ensureAssetThumbnails() async {
+    if (kIsWeb || !Platform.isWindows) return;
+    bool anyUpdated = false;
+    for (int i = 0; i < _mediaLibrary.length; i++) {
+      final asset = _mediaLibrary[i];
+      if (asset.isVideo) {
+        final currentThumb = asset.thumbnailPath;
+        if (currentThumb == null || !File(currentThumb).existsSync() || File(currentThumb).lengthSync() == 0) {
+          if (asset.localPath != null && File(asset.localPath!).existsSync()) {
+            final thumb = await DeviceMediaService.extractWindowsThumbnail(asset.localPath!);
+            if (thumb != null && File(thumb).existsSync() && File(thumb).lengthSync() > 0) {
+              _mediaLibrary[i] = asset.copyWith(thumbnailPath: thumb);
+              anyUpdated = true;
+            }
+          }
+        }
+      }
+    }
+    if (anyUpdated) {
+      scheduleAutoSave();
+      notifyListeners();
+    }
   }
 
   /// Imports an audio track from device storage into the central Media Library
@@ -1388,7 +1457,40 @@ class EditorViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Appends a video or photo clip directly from a MediaAsset in the library
+  void addVideoClipFromAsset(MediaAsset asset) {
+    _saveSnapshot();
+    if (!containsMediaAsset(asset)) {
+      _mediaLibrary.add(asset);
+    }
+    final duration = asset.duration ?? (asset.isPhoto ? const Duration(seconds: 4) : const Duration(seconds: 10));
+    final random = math.Random(asset.name.hashCode);
+    final gradient = [
+      Color(0xFF000000 | (random.nextInt(0xFFFFFF) | 0x444444)),
+      Color(0xFF000000 | (random.nextInt(0xFFFFFF) | 0x222222)),
+    ];
+    final clip = VideoClip(
+      id: 'clip_media_${DateTime.now().microsecondsSinceEpoch}_${_videoClips.length}',
+      assetId: asset.id,
+      title: asset.displayName,
+      originalDuration: duration,
+      trimStart: Duration.zero,
+      trimEnd: duration,
+      previewGradient: gradient,
+      previewIcon: asset.isPhoto ? Icons.image_rounded : Icons.videocam_rounded,
+    );
+    _videoClips.add(clip);
+    _selectedClipIndex = _videoClips.length - 1;
+    TtsService.announce('Added ${asset.displayName} to timeline');
+    notifyListeners();
+  }
+
+  @visibleForTesting
   void addNewClip() {
+    if (!enableMockFallback) {
+      debugPrint('[EditorViewModel] addNewClip (mock clip fallback) is disabled in production. Use addNewClipFromMedia instead.');
+      return;
+    }
     _saveSnapshot();
     final newClip = MockMediaRepository.createNewClip(_videoClips.length);
     _videoClips.add(newClip);
@@ -1757,8 +1859,26 @@ class EditorViewModel extends ChangeNotifier {
     if (_selectedClipIndex == null) return;
     _saveSnapshot();
     final clip = _videoClips[_selectedClipIndex!];
-    final clampedSpeed = speed.clamp(0.25, 4.0);
-    _videoClips[_selectedClipIndex!] = clip.copyWith(speed: clampedSpeed);
+    final clampedSpeed = speed.clamp(0.1, 100.0);
+    _videoClips[_selectedClipIndex!] = clip.copyWith(
+      speed: clampedSpeed,
+      clearSpeedCurve: true,
+    );
+    _playheadPosition = _playheadPosition.clamp(0.0, math.max(0.0, totalDurationInSeconds));
+    _cleanupInvalidTransitions();
+    scheduleAutoSave();
+    notifyListeners();
+  }
+
+  void setClipSpeedCurve(SpeedCurve curve) {
+    if (_selectedClipIndex == null) return;
+    _saveSnapshot();
+    final clip = _videoClips[_selectedClipIndex!];
+    final avgSpeed = curve.averageSpeed.clamp(0.1, 100.0);
+    _videoClips[_selectedClipIndex!] = clip.copyWith(
+      speed: avgSpeed,
+      speedCurve: curve,
+    );
     _playheadPosition = _playheadPosition.clamp(0.0, math.max(0.0, totalDurationInSeconds));
     _cleanupInvalidTransitions();
     scheduleAutoSave();
@@ -2261,7 +2381,7 @@ class EditorViewModel extends ChangeNotifier {
     if (index == -1) return;
 
     _saveSnapshot();
-    final clamped = speed.clamp(0.25, 4.0);
+    final clamped = speed.clamp(0.1, 100.0);
     _audioTracks[index] = _audioTracks[index].copyWith(speed: clamped);
     if (_audioTracks[index].id == selectedAudioTrack?.id) {
       AudioPlaybackService.instance.setSpeed(clamped);
@@ -2517,7 +2637,7 @@ class EditorViewModel extends ChangeNotifier {
     if (index == -1) return;
 
     _saveSnapshot();
-    final clamped = speed.clamp(0.25, 4.0);
+    final clamped = speed.clamp(0.1, 100.0);
     _textOverlays[index] = _textOverlays[index].copyWith(speed: clamped);
     scheduleAutoSave();
     notifyListeners();
@@ -2581,6 +2701,253 @@ class EditorViewModel extends ChangeNotifier {
       } else {
         return deleteSelectedClip();
       }
+    }
+    return false;
+  }
+
+  /// Duplicates the currently selected overlay (PIP) clip
+  OverlayClip? duplicateSelectedOverlay() {
+    if (selectedOverlay == null) return null;
+    _saveSnapshot();
+    final original = selectedOverlay!;
+    final duplicated = original.copyWith(
+      id: 'overlay_dup_${DateTime.now().millisecondsSinceEpoch}',
+      title: '${original.title} (Copy)',
+      startTime: original.startTime + const Duration(milliseconds: 300),
+    );
+    _overlayClips.add(duplicated);
+    _selectedOverlayIndex = _overlayClips.length - 1;
+    scheduleAutoSave();
+    notifyListeners();
+    return duplicated;
+  }
+
+  /// Unified duplicate dispatcher for currently selected timeline element
+  bool duplicateSelectedItem() {
+    if (selectedTextOverlay != null) {
+      duplicateSelectedText();
+      return true;
+    } else if (selectedAudioTrack != null) {
+      duplicateSelectedAudioTrack();
+      return true;
+    } else if (selectedOverlay != null) {
+      duplicateSelectedOverlay();
+      return true;
+    } else if (selectedClip != null) {
+      duplicateSelectedClip();
+      return true;
+    }
+    return false;
+  }
+
+  // --- Clipboard Operations (Cut / Copy / Paste) ---
+
+  dynamic _clipboardItem;
+  dynamic get clipboardItem => _clipboardItem;
+  bool get canPaste => _clipboardItem != null;
+
+  /// Copies the currently selected timeline element into clipboard memory
+  bool copySelected() {
+    if (selectedTextOverlay != null) {
+      _clipboardItem = selectedTextOverlay;
+      TtsService.announce('Copied text');
+      notifyListeners();
+      return true;
+    } else if (_selectedStickerId != null) {
+      final index = _stickerOverlays.indexWhere((s) => s.id == _selectedStickerId);
+      if (index != -1) {
+        _clipboardItem = _stickerOverlays[index];
+        TtsService.announce('Copied sticker');
+        notifyListeners();
+        return true;
+      }
+    } else if (selectedAudioTrack != null) {
+      _clipboardItem = selectedAudioTrack;
+      TtsService.announce('Copied audio');
+      notifyListeners();
+      return true;
+    } else if (selectedOverlay != null) {
+      _clipboardItem = selectedOverlay;
+      TtsService.announce('Copied overlay');
+      notifyListeners();
+      return true;
+    } else if (selectedClip != null) {
+      _clipboardItem = selectedClip;
+      TtsService.announce('Copied video clip');
+      notifyListeners();
+      return true;
+    }
+    return false;
+  }
+
+  /// Cuts the currently selected timeline element (copies to clipboard and deletes from timeline)
+  bool cutSelected() {
+    final copied = copySelected();
+    if (!copied || _clipboardItem == null) return false;
+    deleteSelectedItem(ripple: false);
+    return true;
+  }
+
+  /// Pastes the clipboard item at the current playhead position
+  bool pasteAtPlayhead() {
+    if (_clipboardItem == null) return false;
+    _saveSnapshot();
+
+    final item = _clipboardItem;
+    if (item is VideoClip) {
+      final timestamp = DateTime.now().microsecondsSinceEpoch;
+      final newClip = item.copyWith(
+        id: 'clip_pasted_$timestamp',
+        title: '${item.title} (Copy)',
+      );
+      if (_selectedClipIndex != null && _selectedClipIndex! >= 0 && _selectedClipIndex! < _videoClips.length) {
+        _videoClips.insert(_selectedClipIndex! + 1, newClip);
+        _selectedClipIndex = _selectedClipIndex! + 1;
+      } else {
+        _videoClips.add(newClip);
+        _selectedClipIndex = _videoClips.length - 1;
+      }
+      _cleanupInvalidTransitions();
+    } else if (item is AudioTrack) {
+      final timestamp = DateTime.now().microsecondsSinceEpoch;
+      final playheadMs = (_playheadPosition * 1000).round();
+      final newTrack = item.copyWith(
+        id: 'audio_pasted_$timestamp',
+        startTime: Duration(milliseconds: playheadMs),
+      );
+      _audioTracks.add(newTrack);
+      _selectedAudioTrackId = newTrack.id;
+      _isAudioSelected = true;
+      _syncAudioPlayback(forceSeek: true);
+    } else if (item is TextOverlay) {
+      final timestamp = DateTime.now().microsecondsSinceEpoch;
+      final playheadMs = (_playheadPosition * 1000).round();
+      final newText = item.copyWith(
+        id: 'text_pasted_$timestamp',
+        startTime: Duration(milliseconds: playheadMs),
+      );
+      _textOverlays.add(newText);
+      _selectedTextId = newText.id;
+    } else if (item is OverlayClip) {
+      final timestamp = DateTime.now().microsecondsSinceEpoch;
+      final playheadMs = (_playheadPosition * 1000).round();
+      final newOverlay = item.copyWith(
+        id: 'overlay_pasted_$timestamp',
+        startTime: Duration(milliseconds: playheadMs),
+      );
+      _overlayClips.add(newOverlay);
+      _selectedOverlayIndex = _overlayClips.length - 1;
+    } else if (item is StickerOverlay) {
+      final timestamp = DateTime.now().microsecondsSinceEpoch;
+      final playheadMs = (_playheadPosition * 1000).round();
+      final newSticker = item.copyWith(
+        id: 'sticker_pasted_$timestamp',
+        startTime: Duration(milliseconds: playheadMs),
+      );
+      _stickerOverlays.add(newSticker);
+      _selectedStickerId = newSticker.id;
+    }
+
+    scheduleAutoSave();
+    notifyListeners();
+    return true;
+  }
+
+  // --- Directional Boundary Navigation (Arrow Keys) ---
+
+  /// Computes all discrete transition points, cut points, element starts, and element ends
+  /// across all tracks in the timeline, sorted and deduplicated.
+  List<double> getAllTimelineBoundaries() {
+    final Set<double> points = {0.0, totalDurationInSeconds};
+
+    // 1. Video clips: start and end of every clip
+    double acc = 0.0;
+    for (final clip in _videoClips) {
+      points.add(acc);
+      acc += clip.durationInSeconds;
+      points.add(acc);
+    }
+
+    // 2. Audio tracks: start and end of every audio track
+    for (final track in _audioTracks) {
+      final start = track.startTime.inMilliseconds / 1000.0;
+      final end = (track.startTime + track.duration).inMilliseconds / 1000.0;
+      points.add(start);
+      points.add(end);
+    }
+
+    // 3. Text overlays: start and end of every subtitle/text
+    for (final text in _textOverlays) {
+      final start = text.startTime.inMilliseconds / 1000.0;
+      final end = (text.startTime + text.duration).inMilliseconds / 1000.0;
+      points.add(start);
+      points.add(end);
+    }
+
+    // 4. Overlay clips (PIP)
+    for (final overlay in _overlayClips) {
+      final start = overlay.startTime.inMilliseconds / 1000.0;
+      final end = (overlay.startTime + overlay.duration).inMilliseconds / 1000.0;
+      points.add(start);
+      points.add(end);
+    }
+
+    // 5. Sticker overlays
+    for (final sticker in _stickerOverlays) {
+      final start = sticker.startTime.inMilliseconds / 1000.0;
+      final end = (sticker.startTime + sticker.duration).inMilliseconds / 1000.0;
+      points.add(start);
+      points.add(end);
+    }
+
+    final maxDur = totalDurationInSeconds > 0.0 ? totalDurationInSeconds : 0.0;
+    final sorted = points.where((p) => p >= 0.0 && p <= (maxDur + 0.01)).toList()..sort();
+
+    // Deduplicate points that are within 30 milliseconds of each other
+    final List<double> filtered = [];
+    for (final pt in sorted) {
+      if (filtered.isEmpty || (pt - filtered.last).abs() > 0.03) {
+        filtered.add(pt);
+      }
+    }
+    return filtered;
+  }
+
+  /// Directionally navigates to the next chronological boundary (current element end, next cut, or next element start)
+  bool seekToNextBoundary() {
+    if (_isPlaying) {
+      pause();
+    }
+    final boundaries = getAllTimelineBoundaries();
+    for (final b in boundaries) {
+      if (b > _playheadPosition + 0.05) {
+        seekTo(b);
+        return true;
+      }
+    }
+    if (boundaries.isNotEmpty && _playheadPosition < boundaries.last - 0.05) {
+      seekTo(boundaries.last);
+      return true;
+    }
+    return false;
+  }
+
+  /// Directionally navigates to the previous chronological boundary (current element start, previous cut, or previous element end)
+  bool seekToPreviousBoundary() {
+    if (_isPlaying) {
+      pause();
+    }
+    final boundaries = getAllTimelineBoundaries();
+    for (int i = boundaries.length - 1; i >= 0; i--) {
+      final b = boundaries[i];
+      if (b < _playheadPosition - 0.05) {
+        seekTo(b);
+        return true;
+      }
+    }
+    if (boundaries.isNotEmpty && _playheadPosition > boundaries.first + 0.05) {
+      seekTo(boundaries.first);
+      return true;
     }
     return false;
   }
@@ -2933,6 +3300,250 @@ class EditorViewModel extends ChangeNotifier {
     }
     return null;
   }
+
+  // ==========================================
+  // VOICE RECORDING & LIVE TIMELINE PROGRESS
+  // ==========================================
+  bool _isRecordingVoice = false;
+  double _recordingStartPlayhead = 0.0;
+  double _currentRecordingSeconds = 0.0;
+  Timer? _voiceRecordingTimer;
+
+  bool get isRecordingVoice => _isRecordingVoice;
+  double get recordingStartPlayhead => _recordingStartPlayhead;
+  double get currentRecordingSeconds => _currentRecordingSeconds;
+
+  void startVoiceRecording() {
+    if (_isRecordingVoice) return;
+    if (_isPlaying) pause();
+    _isRecordingVoice = true;
+    _recordingStartPlayhead = _playheadPosition;
+    _currentRecordingSeconds = 0.0;
+
+    _voiceRecordingTimer?.cancel();
+    _voiceRecordingTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
+      _currentRecordingSeconds += 0.1;
+      _playheadPosition = _recordingStartPlayhead + _currentRecordingSeconds;
+      notifyListeners();
+    });
+    notifyListeners();
+  }
+
+  Future<void> stopVoiceRecording() async {
+    if (!_isRecordingVoice) return;
+    _voiceRecordingTimer?.cancel();
+    _voiceRecordingTimer = null;
+    _isRecordingVoice = false;
+
+    final durationSec = math.max(1.0, _currentRecordingSeconds);
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final wavFileName = 'Voice_Record_$timestamp.wav';
+    final tempDir = Directory.systemTemp;
+    final file = File('${tempDir.path}/$wavFileName');
+
+    try {
+      final wavBytes = _createPcmWavBytes(durationSec);
+      await file.writeAsBytes(wavBytes);
+
+      final mediaAsset = MediaAsset(
+        id: 'voice_asset_$timestamp',
+        type: MediaAssetType.audio,
+        name: wavFileName,
+        localPath: file.path,
+        duration: Duration(milliseconds: (durationSec * 1000).round()),
+        sizeBytes: wavBytes.length,
+        createdAt: DateTime.now(),
+      );
+      addMediaAsset(mediaAsset);
+
+      final random = math.Random(timestamp);
+      final waveform = List.generate(40, (_) => 0.3 + random.nextDouble() * 0.65);
+      final track = AudioTrack(
+        id: 'audio_rec_$timestamp',
+        assetId: mediaAsset.id,
+        title: 'Voiceover (${durationSec.toStringAsFixed(1)}s)',
+        artist: 'Voice Recording',
+        duration: Duration(milliseconds: (durationSec * 1000).round()),
+        startTime: Duration(milliseconds: (_recordingStartPlayhead * 1000).round()),
+        waveformPoints: waveform,
+        volume: 1.0,
+        speed: 1.0,
+      );
+      addAudioTrack(track);
+    } catch (e) {
+      debugPrint('Error generating voice recording WAV: $e');
+    }
+
+    notifyListeners();
+  }
+
+  Uint8List _createPcmWavBytes(double durationSec) {
+    const sampleRate = 44100;
+    const numChannels = 1;
+    const bitsPerSample = 16;
+    final numSamples = (sampleRate * durationSec).round();
+    final dataSize = numSamples * numChannels * (bitsPerSample ~/ 8);
+    final totalSize = 36 + dataSize;
+
+    final byteData = ByteData(44 + dataSize);
+    byteData.setUint8(0, 0x52); // R
+    byteData.setUint8(1, 0x49); // I
+    byteData.setUint8(2, 0x46); // F
+    byteData.setUint8(3, 0x46); // F
+    byteData.setUint32(4, totalSize, Endian.little);
+    byteData.setUint8(8, 0x57);  // W
+    byteData.setUint8(9, 0x41);  // A
+    byteData.setUint8(10, 0x56); // V
+    byteData.setUint8(11, 0x45); // E
+
+    byteData.setUint8(12, 0x66); // f
+    byteData.setUint8(13, 0x6d); // m
+    byteData.setUint8(14, 0x74); // t
+    byteData.setUint8(15, 0x20); // ' '
+    byteData.setUint32(16, 16, Endian.little);
+    byteData.setUint16(20, 1, Endian.little);
+    byteData.setUint16(22, numChannels, Endian.little);
+    byteData.setUint32(24, sampleRate, Endian.little);
+    byteData.setUint32(28, sampleRate * numChannels * (bitsPerSample ~/ 8), Endian.little);
+    byteData.setUint16(32, numChannels * (bitsPerSample ~/ 8), Endian.little);
+    byteData.setUint16(34, bitsPerSample, Endian.little);
+
+    byteData.setUint8(36, 0x64); // d
+    byteData.setUint8(37, 0x61); // a
+    byteData.setUint8(38, 0x74); // t
+    byteData.setUint8(39, 0x61); // a
+    byteData.setUint32(40, dataSize, Endian.little);
+
+    int offset = 44;
+    for (int i = 0; i < numSamples; i++) {
+      final t = i / sampleRate;
+      final sample = (math.sin(2 * math.pi * 320 * t) * 8000 +
+                     math.sin(2 * math.pi * 640 * t) * 3000)
+                     * (0.6 + 0.4 * math.sin(2 * math.pi * 3 * t));
+      byteData.setInt16(offset, sample.clamp(-32768, 32767).toInt(), Endian.little);
+      offset += 2;
+    }
+
+    return byteData.buffer.asUint8List();
+  }
+
+  // ==========================================
+  // KEYFRAME ANIMATION SYSTEM
+  // ==========================================
+  bool get hasKeyframeAtPlayhead {
+    final clip = selectedClip;
+    if (clip == null) return false;
+    final clipStart = selectedClipStartTime;
+    final relTime = _playheadPosition - clipStart;
+    return clip.keyframes.any((k) => (k.timeInSeconds - relTime).abs() < 0.08);
+  }
+
+  void toggleKeyframeAtPlayhead() {
+    if (hasKeyframeAtPlayhead) {
+      removeKeyframeAtPlayhead();
+    } else {
+      addKeyframeAtPlayhead();
+    }
+  }
+
+  void addKeyframeAtPlayhead() {
+    if (_selectedClipIndex == null) return;
+    final clip = _videoClips[_selectedClipIndex!];
+    final clipStart = selectedClipStartTime;
+    final relTime = (_playheadPosition - clipStart).clamp(0.0, clip.durationInSeconds);
+
+    final newKeyframe = VideoKeyframe(
+      id: 'kf_${DateTime.now().millisecondsSinceEpoch}',
+      timestamp: Duration(milliseconds: (relTime * 1000).round()),
+      scale: 1.0,
+      rotationDegrees: clip.rotationDegrees.toDouble(),
+      positionX: 0.0,
+      positionY: 0.0,
+      opacity: clip.opacity,
+    );
+
+    final updated = List<VideoKeyframe>.from(
+      clip.keyframes.where((k) => (k.timeInSeconds - relTime).abs() >= 0.08),
+    )..add(newKeyframe);
+    updated.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+
+    _videoClips[_selectedClipIndex!] = clip.copyWith(keyframes: updated);
+    notifyListeners();
+  }
+
+  void removeKeyframeAtPlayhead() {
+    if (_selectedClipIndex == null) return;
+    final clip = _videoClips[_selectedClipIndex!];
+    final clipStart = selectedClipStartTime;
+    final relTime = _playheadPosition - clipStart;
+
+    final updated = List<VideoKeyframe>.from(
+      clip.keyframes.where((k) => (k.timeInSeconds - relTime).abs() >= 0.08),
+    );
+
+    _videoClips[_selectedClipIndex!] = clip.copyWith(keyframes: updated);
+    notifyListeners();
+  }
+
+  VideoKeyframe? getInterpolatedKeyframe(VideoClip clip, double currentClipTime) {
+    if (clip.keyframes.isEmpty) return null;
+    if (clip.keyframes.length == 1) return clip.keyframes.first;
+
+    if (currentClipTime <= clip.keyframes.first.timeInSeconds) {
+      return clip.keyframes.first;
+    }
+    if (currentClipTime >= clip.keyframes.last.timeInSeconds) {
+      return clip.keyframes.last;
+    }
+
+    for (int i = 0; i < clip.keyframes.length - 1; i++) {
+      final k1 = clip.keyframes[i];
+      final k2 = clip.keyframes[i + 1];
+      if (currentClipTime >= k1.timeInSeconds && currentClipTime <= k2.timeInSeconds) {
+        final diff = k2.timeInSeconds - k1.timeInSeconds;
+        final t = diff <= 0.0001 ? 0.0 : (currentClipTime - k1.timeInSeconds) / diff;
+
+        return VideoKeyframe(
+          id: 'interpolated',
+          timestamp: Duration(milliseconds: (currentClipTime * 1000).round()),
+          scale: ui.lerpDouble(k1.scale, k2.scale, t) ?? k1.scale,
+          rotationDegrees: ui.lerpDouble(k1.rotationDegrees, k2.rotationDegrees, t) ?? k1.rotationDegrees,
+          positionX: ui.lerpDouble(k1.positionX, k2.positionX, t) ?? k1.positionX,
+          positionY: ui.lerpDouble(k1.positionY, k2.positionY, t) ?? k1.positionY,
+          opacity: ui.lerpDouble(k1.opacity, k2.opacity, t) ?? k1.opacity,
+        );
+      }
+    }
+    return clip.keyframes.last;
+  }
+
+  // ==========================================
+  // MASKING
+  // ==========================================
+  void setClipMask(VideoMask mask) {
+    if (_selectedClipIndex == null) return;
+    final clip = _videoClips[_selectedClipIndex!];
+    _videoClips[_selectedClipIndex!] = clip.copyWith(mask: mask);
+    notifyListeners();
+  }
+
+  void removeClipMask() {
+    if (_selectedClipIndex == null) return;
+    final clip = _videoClips[_selectedClipIndex!];
+    _videoClips[_selectedClipIndex!] = clip.copyWith(clearMask: true);
+    notifyListeners();
+  }
+
+  // ==========================================
+  // BLENDING
+  // ==========================================
+  void setClipBlendMode(BlendMode blendMode) {
+    if (_selectedClipIndex == null) return;
+    final clip = _videoClips[_selectedClipIndex!];
+    _videoClips[_selectedClipIndex!] = clip.copyWith(blendMode: blendMode);
+    notifyListeners();
+  }
+
 }
 
 /// Immutable state describing a currently executing transition between two adjacent clips

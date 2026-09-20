@@ -3,6 +3,10 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
+import 'package:capcut_video_editor/domain/models/keyframe.dart';
+import 'package:capcut_video_editor/domain/models/video_mask.dart';
 import 'package:capcut_video_editor/core/constants/app_colors.dart';
 import 'package:capcut_video_editor/core/constants/app_dimensions.dart';
 import 'package:capcut_video_editor/core/constants/app_typography.dart';
@@ -11,6 +15,7 @@ import 'package:capcut_video_editor/domain/models/editor_filter.dart';
 import 'package:capcut_video_editor/domain/models/media_asset.dart';
 import 'package:capcut_video_editor/domain/models/text_overlay.dart';
 import 'package:capcut_video_editor/domain/models/video_clip.dart';
+import 'package:capcut_video_editor/domain/models/overlay_clip.dart';
 import 'package:capcut_video_editor/domain/enums/transition_type.dart';
 import 'package:capcut_video_editor/domain/models/video_effect.dart';
 import 'package:capcut_video_editor/core/services/video_playback_service.dart';
@@ -27,10 +32,10 @@ class VideoPreviewSection extends StatefulWidget {
   const VideoPreviewSection({super.key, required this.viewModel});
 
   @override
-  State<VideoPreviewSection> createState() => _VideoPreviewSectionState();
+  State<VideoPreviewSection> createState() => VideoPreviewSectionState();
 }
 
-class _VideoPreviewSectionState extends State<VideoPreviewSection> {
+class VideoPreviewSectionState extends State<VideoPreviewSection> {
   EditorViewModel get viewModel => widget.viewModel;
 
   VideoPlayerSession? _session;
@@ -38,6 +43,25 @@ class _VideoPreviewSectionState extends State<VideoPreviewSection> {
   String? _lastActiveClipId;
   bool _isPlaying = false;
   double _lastPlayheadPosition = -1.0;
+
+  OverlayEntry? _fullScreenEntry;
+  bool get isFullScreen => _fullScreenEntry != null;
+
+  void _enterFullScreen() {
+    _fullScreenEntry = OverlayEntry(
+      builder: (ctx) => _buildFullScreenOverlay(ctx),
+    );
+    Overlay.of(context).insert(_fullScreenEntry!);
+    setState(() {});
+  }
+
+  void _exitFullScreen() {
+    _fullScreenEntry?.remove();
+    _fullScreenEntry = null;
+    if (mounted) setState(() {});
+  }
+
+  void exitFullScreen() => _exitFullScreen();
 
   @override
   void initState() {
@@ -49,10 +73,13 @@ class _VideoPreviewSectionState extends State<VideoPreviewSection> {
   void didUpdateWidget(covariant VideoPreviewSection oldWidget) {
     super.didUpdateWidget(oldWidget);
     _syncPlayerWithModel();
+    _fullScreenEntry?.markNeedsBuild();
   }
 
   @override
   void dispose() {
+    _fullScreenEntry?.remove();
+    _fullScreenEntry = null;
     if (_session != null) {
       VideoPlaybackService.instance.disposeSession(_session!.textureId);
       _session = null;
@@ -129,7 +156,18 @@ class _VideoPreviewSectionState extends State<VideoPreviewSection> {
                 VideoPlaybackService.instance.play(session.textureId, position: Duration(milliseconds: sourceOffsetMs));
                 _isPlaying = true;
               } else {
-                VideoPlaybackService.instance.seekTo(session.textureId, Duration(milliseconds: sourceOffsetMs));
+                // Seek to the current position; on Windows force a repaint after seek
+                // so the Texture widget shows frame content instead of black.
+                VideoPlaybackService.instance
+                    .seekTo(session.textureId, Duration(milliseconds: sourceOffsetMs))
+                    .then((_) {
+                  if (mounted) {
+                    // Small delay to let MF grab the first decoded frame into texture
+                    Future.delayed(const Duration(milliseconds: 150), () {
+                      if (mounted) setState(() {});
+                    });
+                  }
+                });
                 _isPlaying = false;
               }
             }
@@ -142,7 +180,12 @@ class _VideoPreviewSectionState extends State<VideoPreviewSection> {
     // 2. Sync dynamic volume & speed properties
     if (_session != null && _session!.isInitialized && activeClip is VideoClip) {
       VideoPlaybackService.instance.setVolume(_session!.textureId, activeClip.effectiveVolume);
-      VideoPlaybackService.instance.setSpeed(_session!.textureId, activeClip.speed);
+      final currentClipSpeed = activeClip.speedCurve != null
+          ? activeClip.speedCurve!.evaluateSpeedAt(
+              (deltaInClipSec / math.max(0.001, activeClip.durationInSeconds)).clamp(0.0, 1.0),
+            )
+          : activeClip.speed;
+      VideoPlaybackService.instance.setSpeed(_session!.textureId, currentClipSpeed);
     }
 
     // 3. Handle clip boundary switches on the same media file (e.g. split clips)
@@ -291,6 +334,23 @@ class _VideoPreviewSectionState extends State<VideoPreviewSection> {
 
   @override
   Widget build(BuildContext context) {
+    // Always show canvas centered — fullscreen overlay is an OverlayEntry on top
+    return Container(
+      width: double.infinity,
+      color: AppColors.background,
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(AppDimensions.sm),
+          child: FittedBox(
+            fit: BoxFit.contain,
+            child: _buildCanvasContainer(),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCanvasContainer({double? customWidth, double? customHeight}) {
     final activeClip = viewModel.currentActiveClipAtPlayhead;
     final activeTransition = viewModel.activeTransitionAtPlayhead;
     final activeOverlays = viewModel.activeOverlayClipsAtPlayhead;
@@ -301,181 +361,375 @@ class _VideoPreviewSectionState extends State<VideoPreviewSection> {
     final filter = viewModel.activeFilter.getColorFilter();
     final adjustments = viewModel.colorAdjustments.getColorFilter();
 
-    return Container(
-      width: double.infinity,
-      color: AppColors.background,
-      child: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(AppDimensions.sm),
-          child: FittedBox(
-            fit: BoxFit.contain,
-            child: SizedBox(
-              width: 360,
-              height: 360 / targetRatio,
-              child: Container(
-                clipBehavior: Clip.antiAlias,
-                decoration: BoxDecoration(
-                  color: viewModel.canvasBackgroundColor,
-                  borderRadius: BorderRadius.circular(AppDimensions.radiusMd),
-                  border: Border.all(color: AppColors.surfaceHighlight, width: 1.5),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.5),
-                      blurRadius: 16,
-                      offset: const Offset(0, 4),
+    final width = customWidth ?? 360.0;
+    final height = customHeight ?? (width / targetRatio);
+
+    return SizedBox(
+      width: width,
+      height: height,
+      child: Container(
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          color: viewModel.canvasBackgroundColor,
+          borderRadius: BorderRadius.circular(AppDimensions.radiusMd),
+          border: Border.all(color: AppColors.surfaceHighlight, width: 1.5),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.5),
+              blurRadius: 16,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            // 1. Primary Video Canvas with Transformations, Filters & Adjustments
+            if (activeTransition != null)
+              _buildTransitionCanvas(activeTransition, filter, adjustments)
+            else if (activeClip != null)
+              _buildMainVideoCanvas(activeClip, filter, adjustments)
+            else
+              const Center(
+                child: Text(
+                  'No media on timeline',
+                  style: TextStyle(color: AppColors.textMuted, fontSize: 13),
+                ),
+              ),
+
+            // 2. Visual Effects Overlay (Glitch, VHS, RGB, Sparkle)
+            if (viewModel.activeEffect.type != VideoEffectType.none)
+              _buildEffectOverlay(viewModel.activeEffect),
+
+            // 3. Secondary Picture-in-Picture (PIP) Overlay Layers
+            ...activeOverlays.map((overlay) => _buildOverlayLayer(overlay)),
+
+            // 4. Active Stickers Overlays
+            ...activeStickers.map((sticker) => _buildStickerOverlay(sticker)),
+
+            // 5. Tap to Play / Pause Gesture Overlay
+            GestureDetector(
+              behavior: (viewModel.selectedClipId != null)
+                  ? HitTestBehavior.deferToChild
+                  : HitTestBehavior.translucent,
+              onTap: (viewModel.selectedClipId != null) ? null : viewModel.togglePlayPause,
+              child: AnimatedOpacity(
+                opacity: viewModel.isPlaying ? 0.0 : 1.0,
+                duration: const Duration(milliseconds: 200),
+                child: Center(
+                  child: IgnorePointer(
+                    ignoring: viewModel.isPlaying,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: viewModel.togglePlayPause,
+                      child: Container(
+                        width: 56,
+                        height: 56,
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.55),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white.withValues(alpha: 0.3)),
+                        ),
+                        child: const Icon(
+                          Icons.play_arrow_rounded,
+                          size: 36,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+
+            // 6. Active Text / Subtitle Overlays (Positioned on top for drag and interaction)
+            ...activeTexts.map((text) => _buildTextOverlay(text)),
+
+            // 7. Top-Left: Badges (Aspect Ratio & Active Filter)
+            Positioned(
+              top: 8,
+              left: 8,
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.6),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      viewModel.aspectRatio.label,
+                      style: const TextStyle(fontSize: 10, color: AppColors.primary, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  if (viewModel.activeFilter.type != EditorFilter.presets.first.type) ...[
+                    const SizedBox(width: 4),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: AppColors.secondary.withValues(alpha: 0.8),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        viewModel.activeFilter.name,
+                        style: const TextStyle(fontSize: 9, color: Colors.white, fontWeight: FontWeight.bold),
+                      ),
                     ),
                   ],
-                ),
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    // 1. Primary Video Canvas with Transformations, Filters & Adjustments
-                    if (activeTransition != null)
-                      _buildTransitionCanvas(activeTransition, filter, adjustments)
-                    else if (activeClip != null)
-                      _buildMainVideoCanvas(activeClip, filter, adjustments)
-                    else
-                      const Center(
-                        child: Text(
-                          'No media on timeline',
-                          style: TextStyle(color: AppColors.textMuted, fontSize: 13),
-                        ),
+                  if (activeTransition != null) ...[
+                    const SizedBox(width: 4),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: AppColors.accentPurple.withValues(alpha: 0.85),
+                        borderRadius: BorderRadius.circular(4),
                       ),
-
-                    // 2. Visual Effects Overlay (Glitch, VHS, RGB, Sparkle)
-                    if (viewModel.activeEffect.type != VideoEffectType.none)
-                      _buildEffectOverlay(viewModel.activeEffect),
-
-                    // 3. Secondary Picture-in-Picture (PIP) Overlay Layers
-                    ...activeOverlays.map((overlay) => _buildOverlayLayer(overlay)),
-
-                    // 4. Active Stickers Overlays
-                    ...activeStickers.map((sticker) => _buildStickerOverlay(sticker)),
-
-                    // 5. Tap to Play / Pause Gesture Overlay
-                    GestureDetector(
-                      behavior: (viewModel.selectedClipId != null)
-                          ? HitTestBehavior.deferToChild
-                          : HitTestBehavior.translucent,
-                      onTap: (viewModel.selectedClipId != null) ? null : viewModel.togglePlayPause,
-                      child: AnimatedOpacity(
-                        opacity: viewModel.isPlaying ? 0.0 : 1.0,
-                        duration: const Duration(milliseconds: 200),
-                        child: Center(
-                          child: IgnorePointer(
-                            ignoring: viewModel.isPlaying,
-                            child: GestureDetector(
-                              behavior: HitTestBehavior.opaque,
-                              onTap: viewModel.togglePlayPause,
-                              child: Container(
-                                width: 56,
-                                height: 56,
-                                decoration: BoxDecoration(
-                                  color: Colors.black.withValues(alpha: 0.55),
-                                  shape: BoxShape.circle,
-                                  border: Border.all(color: Colors.white.withValues(alpha: 0.3)),
-                                ),
-                                child: const Icon(
-                                  Icons.play_arrow_rounded,
-                                  size: 36,
-                                  color: Colors.white,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
+                      child: Text(
+                        'TRANSITION: ${activeTransition.transition.type.name.toUpperCase()} ${(activeTransition.progress * 100).toInt()}%',
+                        style: const TextStyle(fontSize: 9, color: Colors.white, fontWeight: FontWeight.bold),
                       ),
                     ),
+                  ],
+                ],
+              ),
+            ),
 
-                    // 6. Active Text / Subtitle Overlays (Positioned on top for drag and interaction)
-                    ...activeTexts.map((text) => _buildTextOverlay(text)),
+            // Top-Right: Fullscreen Toggle Button
+            if (!isFullScreen)
+              Positioned(
+                top: 8,
+                right: 8,
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(20),
+                    onTap: _enterFullScreen,
+                    child: Container(
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.65),
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white24, width: 0.8),
+                      ),
+                      child: const Icon(
+                        Icons.fullscreen_rounded,
+                        size: 18,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
 
-                    // 7. Top-Left: Badges (Aspect Ratio & Active Filter)
+            // 8. Bottom-Center: Live Timecode Pill
+            Positioned(
+              bottom: 8,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.65),
+                    borderRadius: BorderRadius.circular(AppDimensions.radiusFull),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        TimeFormatter.formatSeconds(viewModel.playheadPosition),
+                        style: AppTypography.timecodeLarge,
+                      ),
+                      const Text(' / ', style: TextStyle(color: AppColors.textMuted, fontSize: 11)),
+                      Text(
+                        TimeFormatter.formatSeconds(viewModel.totalDurationInSeconds),
+                        style: AppTypography.timecodeMuted,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFullScreenOverlay(BuildContext overlayContext) {
+    final targetRatio = viewModel.aspectRatio.ratio ?? (9 / 16);
+
+    return Material(
+      color: Colors.black,
+      child: Shortcuts(
+        shortcuts: const <ShortcutActivator, Intent>{
+          SingleActivator(LogicalKeyboardKey.escape): DismissIntent(),
+          SingleActivator(LogicalKeyboardKey.keyF): DismissIntent(),
+          SingleActivator(LogicalKeyboardKey.space): DoNothingAndStopPropagationIntent(),
+        },
+        child: Actions(
+          actions: <Type, Action<Intent>>{
+            DismissIntent: CallbackAction<DismissIntent>(
+              onInvoke: (intent) => _exitFullScreen(),
+            ),
+          },
+          child: Focus(
+            autofocus: true,
+            onKeyEvent: (node, event) {
+              if (event is KeyDownEvent) {
+                if (event.logicalKey == LogicalKeyboardKey.escape ||
+                    event.logicalKey == LogicalKeyboardKey.keyF) {
+                  _exitFullScreen();
+                  return KeyEventResult.handled;
+                }
+                if (event.logicalKey == LogicalKeyboardKey.space) {
+                  viewModel.togglePlayPause();
+                  return KeyEventResult.handled;
+                }
+              }
+              return KeyEventResult.ignored;
+            },
+        child: ListenableBuilder(
+          listenable: viewModel,
+          builder: (context, _) {
+            return LayoutBuilder(
+              builder: (context, constraints) {
+                final maxW = constraints.maxWidth - 40;
+                final maxH = constraints.maxHeight - 140;
+                double w = maxW;
+                double h = w / targetRatio;
+                if (h > maxH) {
+                  h = maxH;
+                  w = h * targetRatio;
+                }
+
+                return Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    // Maximized Centered Canvas
+                    Center(
+                      child: _buildCanvasContainer(customWidth: w, customHeight: h),
+                    ),
+
+                    // Top Floating Header Bar with Minimize Button
                     Positioned(
-                      top: 8,
-                      left: 8,
+                      top: 16,
+                      left: 24,
+                      right: 24,
                       child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                             decoration: BoxDecoration(
-                              color: Colors.black.withValues(alpha: 0.6),
-                              borderRadius: BorderRadius.circular(4),
+                              color: Colors.black.withValues(alpha: 0.75),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(color: Colors.white24, width: 0.8),
                             ),
-                            child: Text(
-                              viewModel.aspectRatio.label,
-                              style: const TextStyle(fontSize: 10, color: AppColors.primary, fontWeight: FontWeight.bold),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.videocam_rounded, size: 14, color: AppColors.primary),
+                                const SizedBox(width: 6),
+                                Text(
+                                  '${viewModel.aspectRatio.label} • Fullscreen Mode',
+                                  style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                                ),
+                              ],
                             ),
                           ),
-                          if (viewModel.activeFilter.type != EditorFilter.presets.first.type) ...[
-                            const SizedBox(width: 4),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          InkWell(
+                            borderRadius: BorderRadius.circular(8),
+                            onTap: _exitFullScreen,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                               decoration: BoxDecoration(
-                                color: AppColors.secondary.withValues(alpha: 0.8),
-                                borderRadius: BorderRadius.circular(4),
+                                color: Colors.black.withValues(alpha: 0.8),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: AppColors.primary, width: 1.2),
+                                boxShadow: const [
+                                  BoxShadow(color: Colors.black54, blurRadius: 8, offset: Offset(0, 2)),
+                                ],
                               ),
-                              child: Text(
-                                viewModel.activeFilter.name,
-                                style: const TextStyle(fontSize: 9, color: Colors.white, fontWeight: FontWeight.bold),
+                              child: const Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.fullscreen_exit_rounded, color: AppColors.primary, size: 20),
+                                  SizedBox(width: 6),
+                                  Text(
+                                    'Minimize (Esc)',
+                                    style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                                  ),
+                                ],
                               ),
                             ),
-                          ],
-                          if (activeTransition != null) ...[
-                            const SizedBox(width: 4),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: AppColors.accentPurple.withValues(alpha: 0.85),
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                              child: Text(
-                                'TRANSITION: ${activeTransition.transition.type.name.toUpperCase()} ${(activeTransition.progress * 100).toInt()}%',
-                                style: const TextStyle(fontSize: 9, color: Colors.white, fontWeight: FontWeight.bold),
-                              ),
-                            ),
-                          ],
+                          ),
                         ],
                       ),
                     ),
 
-                    // 8. Bottom-Center: Live Timecode Pill
+                    // Bottom Floating Scrubber & Play/Pause Controls
                     Positioned(
-                      bottom: 8,
-                      left: 0,
-                      right: 0,
-                      child: Center(
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-                          decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.65),
-                            borderRadius: BorderRadius.circular(AppDimensions.radiusFull),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                TimeFormatter.formatSeconds(viewModel.playheadPosition),
-                                style: AppTypography.timecodeLarge,
+                      bottom: 20,
+                      left: 24,
+                      right: 24,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.75),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.white24, width: 0.8),
+                        ),
+                        child: Row(
+                          children: [
+                            IconButton(
+                              icon: Icon(
+                                viewModel.isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                                color: AppColors.primary,
+                                size: 26,
                               ),
-                              const Text(' / ', style: TextStyle(color: AppColors.textMuted, fontSize: 11)),
-                              Text(
-                                TimeFormatter.formatSeconds(viewModel.totalDurationInSeconds),
-                                style: AppTypography.timecodeMuted,
+                              onPressed: viewModel.togglePlayPause,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              TimeFormatter.formatSeconds(viewModel.playheadPosition),
+                              style: AppTypography.timecodeLarge,
+                            ),
+                            Expanded(
+                              child: SliderTheme(
+                                data: SliderTheme.of(context).copyWith(
+                                  trackHeight: 3,
+                                  thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                                  activeTrackColor: AppColors.primary,
+                                  inactiveTrackColor: Colors.white24,
+                                  thumbColor: AppColors.primary,
+                                ),
+                                child: Slider(
+                                  value: viewModel.playheadPosition.clamp(0.0, math.max(0.01, viewModel.totalDurationInSeconds)),
+                                  min: 0.0,
+                                  max: math.max(0.01, viewModel.totalDurationInSeconds),
+                                  onChanged: (pos) => viewModel.seekTo(pos),
+                                ),
                               ),
-                            ],
-                          ),
+                            ),
+                            Text(
+                              TimeFormatter.formatSeconds(viewModel.totalDurationInSeconds),
+                              style: AppTypography.timecodeMuted,
+                            ),
+                          ],
                         ),
                       ),
                     ),
                   ],
-                ),
-              ),
-            ),
-          ),
+                );
+              },
+            );
+          },
         ),
       ),
-    );
+    ),
+  ),
+);
   }
 
   Widget _buildTransitionCanvas(
@@ -815,6 +1069,12 @@ class _VideoPreviewSectionState extends State<VideoPreviewSection> {
         !kIsWeb &&
         File(thumbnailPath).existsSync();
 
+    final isMissingMedia = localPath != null &&
+        !localPath.startsWith('content://') &&
+        !kIsWeb &&
+        !hasLocalFile &&
+        !hasThumbnail;
+
     Widget canvasChild;
     if (hasLocalFile) {
       if (isPhoto) {
@@ -832,17 +1092,43 @@ class _VideoPreviewSectionState extends State<VideoPreviewSection> {
             _secondarySession!.isInitialized;
 
         if (isSessionA) {
-          canvasChild = Center(
+          final liveTexture = Center(
             child: AspectRatio(
-              aspectRatio: _session!.aspectRatio,
-              child: Texture(textureId: _session!.textureId),
+              aspectRatio: _session!.aspectRatio > 0 ? _session!.aspectRatio : 16 / 9,
+              child: Texture(
+                textureId: _session!.textureId,
+                filterQuality: FilterQuality.medium,
+              ),
             ),
           );
+
+          if (hasThumbnail) {
+            canvasChild = Stack(
+              fit: StackFit.expand,
+              children: [
+                Center(
+                  child: AspectRatio(
+                    aspectRatio: _session!.aspectRatio > 0 ? _session!.aspectRatio : 16 / 9,
+                    child: Image.file(
+                      File(thumbnailPath),
+                      fit: BoxFit.contain,
+                    ),
+                  ),
+                ),
+                liveTexture,
+              ],
+            );
+          } else {
+            canvasChild = liveTexture;
+          }
         } else if (isSessionB) {
           canvasChild = Center(
             child: AspectRatio(
-              aspectRatio: _secondarySession!.aspectRatio,
-              child: Texture(textureId: _secondarySession!.textureId),
+              aspectRatio: _secondarySession!.aspectRatio > 0 ? _secondarySession!.aspectRatio : 16 / 9,
+              child: Texture(
+                textureId: _secondarySession!.textureId,
+                filterQuality: FilterQuality.medium,
+              ),
             ),
           );
         } else if (hasThumbnail) {
@@ -855,6 +1141,8 @@ class _VideoPreviewSectionState extends State<VideoPreviewSection> {
           canvasChild = _buildPlaceholderGraphic(clip);
         }
       }
+    } else if (isMissingMedia) {
+      canvasChild = _buildMissingMediaGraphic(clip);
     } else {
       canvasChild = _buildPlaceholderGraphic(clip);
     }
@@ -906,6 +1194,12 @@ class _VideoPreviewSectionState extends State<VideoPreviewSection> {
       );
     }
 
+    final isMissingMedia = localPath != null &&
+        !localPath.startsWith('content://') &&
+        !kIsWeb &&
+        !hasLocalFile &&
+        !hasThumbnail;
+
     Widget canvasChild;
 
     if (hasLocalFile) {
@@ -922,17 +1216,47 @@ class _VideoPreviewSectionState extends State<VideoPreviewSection> {
         Widget videoPlayerWidget;
 
         if (_session != null && _session!.isInitialized) {
-          videoPlayerWidget = Center(
+          final liveTexture = Center(
             child: AspectRatio(
-              aspectRatio: _session!.aspectRatio,
-              child: Texture(textureId: _session!.textureId),
+              aspectRatio: _session!.aspectRatio > 0 ? _session!.aspectRatio : 16 / 9,
+              child: Texture(
+                textureId: _session!.textureId,
+                filterQuality: FilterQuality.medium,
+              ),
             ),
           );
+
+          if (hasThumbnail) {
+            // Live hardware texture on top; thumbnail image underneath so that
+            // while paused or seeking, the video canvas is never black.
+            videoPlayerWidget = Stack(
+              fit: StackFit.expand,
+              children: [
+                Center(
+                  child: AspectRatio(
+                    aspectRatio: _session!.aspectRatio > 0 ? _session!.aspectRatio : 16 / 9,
+                    child: Image.file(
+                      File(thumbnailPath),
+                      fit: BoxFit.contain,
+                    ),
+                  ),
+                ),
+                liveTexture,
+              ],
+            );
+          } else {
+            videoPlayerWidget = liveTexture;
+          }
         } else if (hasThumbnail) {
-          videoPlayerWidget = Image.file(
-            File(thumbnailPath),
-            fit: BoxFit.contain,
-            errorBuilder: (ctx, err, stack) => _buildVideoPlaybackSurface(activeClip, localPath),
+          videoPlayerWidget = Center(
+            child: AspectRatio(
+              aspectRatio: 16 / 9,
+              child: Image.file(
+                File(thumbnailPath),
+                fit: BoxFit.contain,
+                errorBuilder: (ctx, err, stack) => _buildVideoPlaybackSurface(activeClip, localPath),
+              ),
+            ),
           );
         } else {
           videoPlayerWidget = _buildVideoPlaybackSurface(activeClip, localPath);
@@ -983,12 +1307,25 @@ class _VideoPreviewSectionState extends State<VideoPreviewSection> {
           ],
         );
       }
+    } else if (isMissingMedia) {
+      canvasChild = _buildMissingMediaGraphic(activeClip);
     } else {
       canvasChild = _buildPlaceholderGraphic(activeClip);
     }
 
+    double clipTime = 0.0;
+    if (activeClip is VideoClip) {
+      clipTime = (viewModel.playheadPosition - viewModel.selectedClipStartTime).clamp(0.0, activeClip.durationInSeconds);
+    }
+    final VideoKeyframe? keyframe = activeClip is VideoClip ? viewModel.getInterpolatedKeyframe(activeClip, clipTime) : null;
+    final animScale = keyframe?.scale ?? 1.0;
+    final animRotation = keyframe?.rotationDegrees ?? (activeClip.rotationDegrees as num).toDouble();
+    final animPosX = keyframe?.positionX ?? 0.0;
+    final animPosY = keyframe?.positionY ?? 0.0;
+    final animOpacity = (keyframe?.opacity ?? (activeClip.opacity as num).toDouble()).clamp(0.0, 1.0);
+
     Widget visualChild = Opacity(
-      opacity: activeClip.opacity,
+      opacity: animOpacity,
       child: canvasChild,
     );
 
@@ -1012,25 +1349,105 @@ class _VideoPreviewSectionState extends State<VideoPreviewSection> {
 
     final isSelected = activeClip is VideoClip && activeClip.id == viewModel.selectedClipId;
 
-    Widget videoContent = activeClip is VideoClip
-        ? InteractiveTransformCanvas(
-            key: ValueKey('clip_canvas_${activeClip.id}'),
-            clip: activeClip,
-            isSelected: isSelected,
-            viewModel: viewModel,
-            child: visualChild,
-          )
-        : Transform(
-            alignment: Alignment.center,
-            transform: ClipSpatialTransform.fromClip(activeClip).toMatrix4(
-              legacyRotationDegrees: activeClip.rotationDegrees,
-              flipHorizontal: activeClip.flipHorizontal,
-              flipVertical: activeClip.flipVertical,
+    Widget videoContent;
+    if (activeClip is VideoClip && activeClip.keyframes.isNotEmpty && keyframe != null) {
+      videoContent = Transform.translate(
+        offset: Offset(animPosX, animPosY),
+        child: Transform(
+          alignment: Alignment.center,
+          transform: Matrix4.identity()
+            ..rotateZ(animRotation * math.pi / 180)
+            ..scaleByDouble(
+              (activeClip.flipHorizontal ? -1.0 : 1.0) * animScale,
+              (activeClip.flipVertical ? -1.0 : 1.0) * animScale,
+              1.0,
+              1.0,
             ),
-            child: visualChild,
-          );
+          child: visualChild,
+        ),
+      );
+    } else if (activeClip is VideoClip) {
+      videoContent = InteractiveTransformCanvas(
+        key: ValueKey('clip_canvas_${activeClip.id}'),
+        clip: activeClip,
+        isSelected: isSelected,
+        viewModel: viewModel,
+        child: visualChild,
+      );
+    } else {
+      videoContent = Transform(
+        alignment: Alignment.center,
+        transform: ClipSpatialTransform.fromClip(activeClip).toMatrix4(
+          legacyRotationDegrees: activeClip.rotationDegrees,
+          flipHorizontal: activeClip.flipHorizontal,
+          flipVertical: activeClip.flipVertical,
+        ),
+        child: visualChild,
+      );
+    }
+
+    if (activeClip is VideoClip && activeClip.mask != null) {
+      videoContent = ClipPath(
+        clipper: MaskPathClipper(activeClip.mask!),
+        child: videoContent,
+      );
+    }
+
+    if (activeClip is VideoClip && activeClip.blendMode != BlendMode.srcOver) {
+      videoContent = CanvasBlendLayer(
+        blendMode: activeClip.blendMode,
+        child: videoContent,
+      );
+    }
 
     return videoContent;
+  }
+
+  Widget _buildMissingMediaGraphic(dynamic activeClip) {
+    final title = activeClip is VideoClip ? activeClip.title : 'Clip';
+    return Container(
+      color: const Color(0xFF161212),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.redAccent.withValues(alpha: 0.15),
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.redAccent.withValues(alpha: 0.4), width: 1.5),
+              ),
+              child: const Icon(
+                Icons.broken_image_rounded,
+                size: 36,
+                color: Colors.redAccent,
+              ),
+            ),
+            const SizedBox(height: 10),
+            const Text(
+              'Media Offline',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+                letterSpacing: 0.5,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'File not found: $title',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 11,
+                color: Colors.white54,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _buildPlaceholderGraphic(dynamic activeClip) {
@@ -1164,7 +1581,7 @@ class _VideoPreviewSectionState extends State<VideoPreviewSection> {
   }
 
   Widget _buildOverlayLayer(dynamic overlay) {
-    return Align(
+    Widget overlayContent = Align(
       alignment: FractionalOffset(overlay.position.dx, overlay.position.dy),
       child: Transform.scale(
         scale: overlay.scale,
@@ -1205,6 +1622,23 @@ class _VideoPreviewSectionState extends State<VideoPreviewSection> {
         ),
       ),
     );
+
+    if (overlay is OverlayClip) {
+      if (overlay.mask != null) {
+        overlayContent = ClipPath(
+          clipper: MaskPathClipper(overlay.mask!),
+          child: overlayContent,
+        );
+      }
+      if (overlay.blendMode != BlendMode.srcOver) {
+        overlayContent = CanvasBlendLayer(
+          blendMode: overlay.blendMode,
+          child: overlayContent,
+        );
+      }
+    }
+
+    return overlayContent;
   }
 
   Widget _buildStickerOverlay(dynamic sticker) {
@@ -1442,4 +1876,129 @@ class _RadialTransitionClipper extends CustomClipper<Path> {
 
   @override
   bool shouldReclip(_RadialTransitionClipper oldClipper) => oldClipper.progress != progress;
+}
+
+class CanvasBlendLayer extends SingleChildRenderObjectWidget {
+  final BlendMode blendMode;
+  const CanvasBlendLayer({super.key, required this.blendMode, required super.child});
+
+  @override
+  RenderObject createRenderObject(BuildContext context) => RenderCanvasBlendLayer(blendMode);
+
+  @override
+  void updateRenderObject(BuildContext context, covariant RenderCanvasBlendLayer renderObject) {
+    renderObject.blendMode = blendMode;
+  }
+}
+
+class RenderCanvasBlendLayer extends RenderProxyBox {
+  BlendMode _blendMode;
+  RenderCanvasBlendLayer(this._blendMode);
+
+  set blendMode(BlendMode value) {
+    if (_blendMode != value) {
+      _blendMode = value;
+      markNeedsPaint();
+    }
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    if (child == null) return;
+    if (_blendMode == BlendMode.srcOver) {
+      context.paintChild(child!, offset);
+    } else {
+      final bounds = offset & size;
+      final paint = Paint()..blendMode = _blendMode;
+      context.canvas.saveLayer(bounds, paint);
+      context.paintChild(child!, offset);
+      context.canvas.restore();
+    }
+  }
+}
+
+class MaskPathClipper extends CustomClipper<Path> {
+  final VideoMask mask;
+
+  MaskPathClipper(this.mask);
+
+  @override
+  Path getClip(Size size) {
+    final Path path = Path();
+    final center = Offset(size.width / 2, size.height / 2);
+    final w = size.width * mask.size;
+    final h = size.height * mask.size;
+
+    switch (mask.type) {
+      case MaskType.none:
+        path.addRect(Rect.fromLTWH(0, 0, size.width, size.height));
+        break;
+
+      case MaskType.split:
+        path.addRect(Rect.fromLTWH(0, 0, size.width, size.height * 0.5 * mask.size + size.height * 0.25));
+        break;
+
+      case MaskType.filmstrip:
+        final barHeight = (size.height * (1.0 - mask.size.clamp(0.2, 0.9))) / 2;
+        path.addRect(Rect.fromLTWH(0, barHeight, size.width, size.height - barHeight * 2));
+        break;
+
+      case MaskType.rectangle:
+        path.addRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromCenter(center: center, width: w, height: h),
+            Radius.circular(mask.feather > 0 ? mask.feather * 2 : 8),
+          ),
+        );
+        break;
+
+      case MaskType.circle:
+        path.addOval(Rect.fromCenter(center: center, width: w, height: h));
+        break;
+
+      case MaskType.heart:
+        final scale = mask.size;
+        final hw = size.width / 2;
+        final hh = size.height / 2;
+        path.moveTo(hw, hh + 40 * scale);
+        path.cubicTo(hw - 60 * scale, hh, hw - 60 * scale, hh - 40 * scale, hw, hh - 15 * scale);
+        path.cubicTo(hw + 60 * scale, hh - 40 * scale, hw + 60 * scale, hh, hw, hh + 40 * scale);
+        path.close();
+        break;
+
+      case MaskType.star:
+        final outerR = (w / 2);
+        final innerR = outerR * 0.45;
+        for (int i = 0; i < 5; i++) {
+          final outerAngle = -math.pi / 2 + (i * 2 * math.pi / 5);
+          final innerAngle = outerAngle + math.pi / 5;
+          final ox = center.dx + outerR * math.cos(outerAngle);
+          final oy = center.dy + outerR * math.sin(outerAngle);
+          final ix = center.dx + innerR * math.cos(innerAngle);
+          final iy = center.dy + innerR * math.sin(innerAngle);
+          if (i == 0) {
+            path.moveTo(ox, oy);
+          } else {
+            path.lineTo(ox, oy);
+          }
+          path.lineTo(ix, iy);
+        }
+        path.close();
+        break;
+    }
+
+    if (mask.inverted) {
+      final full = Path()..addRect(Rect.fromLTWH(0, 0, size.width, size.height));
+      return Path.combine(PathOperation.difference, full, path);
+    }
+
+    return path;
+  }
+
+  @override
+  bool shouldReclip(covariant MaskPathClipper oldClipper) =>
+      oldClipper.mask.type != mask.type ||
+      oldClipper.mask.size != mask.size ||
+      oldClipper.mask.feather != mask.feather ||
+      oldClipper.mask.inverted != mask.inverted;
 }

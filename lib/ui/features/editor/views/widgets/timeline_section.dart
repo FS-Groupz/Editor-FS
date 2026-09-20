@@ -78,17 +78,22 @@ class _TimelineSectionState extends State<TimelineSection> {
     }
   }
 
+  double _lastSyncedPlayhead = -1.0;
+
   void _onViewModelChanged() {
     if (!mounted) return;
 
     final vm = widget.viewModel;
 
-    // 1. Synchronize horizontal playhead scrolling during playback
-    if (vm.isPlaying && !_isUserScrollingHorizontal && _horizontalScrollController.hasClients) {
-      final targetScroll = vm.playheadPosition * vm.pixelsPerSecond;
-      _horizontalScrollController.jumpTo(
-        targetScroll.clamp(0.0, _horizontalScrollController.position.maxScrollExtent),
-      );
+    // 1. Synchronize horizontal timeline scrolling with playhead position
+    if (!_isUserScrollingHorizontal && _horizontalScrollController.hasClients) {
+      if (vm.isPlaying || (vm.playheadPosition - _lastSyncedPlayhead).abs() > 0.001) {
+        _lastSyncedPlayhead = vm.playheadPosition;
+        final targetScroll = vm.playheadPosition * vm.pixelsPerSecond;
+        _horizontalScrollController.jumpTo(
+          targetScroll.clamp(0.0, _horizontalScrollController.position.maxScrollExtent),
+        );
+      }
     }
 
     // 2. Auto-scroll vertically when a new layer is created
@@ -176,20 +181,63 @@ class _TimelineSectionState extends State<TimelineSection> {
           // 1. Timeline Top Control Bar (Zoom slider, Duration badge, Clear Selection)
           _buildTimelineControlBar(viewModel),
 
-          // 2. Pinned Timeline Ruler (Fixed at top of track canvas, scrolls horizontally with tracks)
-          Container(
-            height: AppDimensions.timelineRulerHeight,
-            width: double.infinity,
-            color: AppColors.timelineRulerBg,
-            child: SingleChildScrollView(
-              controller: _rulerScrollController,
-              scrollDirection: Axis.horizontal,
-              physics: const NeverScrollableScrollPhysics(),
-              child: Padding(
-                padding: EdgeInsets.symmetric(horizontal: halfScreenWidth),
-                child: TimelineRuler(
-                  totalDurationSeconds: totalDuration,
-                  pixelsPerSecond: viewModel.pixelsPerSecond,
+          // 2. Pinned Timeline Ruler (Fixed at top of track canvas, click to seek & drag to scrub)
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTapDown: (details) {
+              if (viewModel.isPlaying) viewModel.pause();
+              final localX = details.localPosition.dx;
+              final targetTime = ((_rulerScrollController.hasClients ? _rulerScrollController.offset : 0.0) +
+                      localX -
+                      halfScreenWidth) /
+                  viewModel.pixelsPerSecond;
+              final clampedTime = targetTime.clamp(0.0, viewModel.totalDurationInSeconds);
+              viewModel.seekTo(clampedTime);
+              if (_horizontalScrollController.hasClients) {
+                _horizontalScrollController.jumpTo(
+                  (clampedTime * viewModel.pixelsPerSecond)
+                      .clamp(0.0, _horizontalScrollController.position.maxScrollExtent),
+                );
+              }
+            },
+            onHorizontalDragStart: (details) {
+              if (viewModel.isPlaying) viewModel.pause();
+              _isUserScrollingHorizontal = true;
+            },
+            onHorizontalDragUpdate: (details) {
+              final deltaSec = (details.primaryDelta ?? 0.0) / viewModel.pixelsPerSecond;
+              final newPlayhead = (viewModel.playheadPosition + deltaSec)
+                  .clamp(0.0, viewModel.totalDurationInSeconds);
+              viewModel.seekTo(newPlayhead);
+              if (_horizontalScrollController.hasClients) {
+                _horizontalScrollController.jumpTo(
+                  (newPlayhead * viewModel.pixelsPerSecond)
+                      .clamp(0.0, _horizontalScrollController.position.maxScrollExtent),
+                );
+              }
+            },
+            onHorizontalDragEnd: (details) {
+              _isUserScrollingHorizontal = false;
+              _lastSyncedPlayhead = viewModel.playheadPosition;
+            },
+            onHorizontalDragCancel: () {
+              _isUserScrollingHorizontal = false;
+              _lastSyncedPlayhead = viewModel.playheadPosition;
+            },
+            child: Container(
+              height: AppDimensions.timelineRulerHeight,
+              width: double.infinity,
+              color: AppColors.timelineRulerBg,
+              child: SingleChildScrollView(
+                controller: _rulerScrollController,
+                scrollDirection: Axis.horizontal,
+                physics: const NeverScrollableScrollPhysics(),
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: halfScreenWidth),
+                  child: TimelineRuler(
+                    totalDurationSeconds: totalDuration,
+                    pixelsPerSecond: viewModel.pixelsPerSecond,
+                  ),
                 ),
               ),
             ),
@@ -224,9 +272,23 @@ class _TimelineSectionState extends State<TimelineSection> {
                     physics: const BouncingScrollPhysics(),
                     child: Padding(
                       padding: EdgeInsets.symmetric(horizontal: halfScreenWidth),
-                      child: SizedBox(
-                        width: math.max(totalTrackWidth, screenWidth),
-                        child: SingleChildScrollView(
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.translucent,
+                        onTapDown: (details) {
+                          if (viewModel.isPlaying) viewModel.pause();
+                          final tapSec = (details.localPosition.dx / viewModel.pixelsPerSecond)
+                              .clamp(0.0, viewModel.totalDurationInSeconds);
+                          viewModel.seekTo(tapSec);
+                          if (_horizontalScrollController.hasClients) {
+                            _horizontalScrollController.jumpTo(
+                              (tapSec * viewModel.pixelsPerSecond)
+                                  .clamp(0.0, _horizontalScrollController.position.maxScrollExtent),
+                            );
+                          }
+                        },
+                        child: SizedBox(
+                          width: math.max(totalTrackWidth, screenWidth),
+                          child: SingleChildScrollView(
                           controller: _verticalScrollController,
                           scrollDirection: Axis.vertical,
                           physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
@@ -263,10 +325,10 @@ class _TimelineSectionState extends State<TimelineSection> {
                                 _buildStickerTrackRows(viewModel, totalTrackWidth),
                               ],
 
-                              // Track 6+: Background Audio & Sound Effect Tracks
-                              if (viewModel.audioTracks.isNotEmpty) ...[
+                              // Track 6+: Background Audio & Sound Effect Tracks & Real-time Voice Recording
+                              if (viewModel.audioTracks.isNotEmpty || viewModel.isRecordingVoice) ...[
                                 const SizedBox(height: 4),
-                                _buildAudioTrackRows(viewModel),
+                                _buildAudioTrackRows(viewModel, totalTrackWidth),
                               ],
 
                               // Bottom padding to ensure comfortable scrolling of bottom layers
@@ -276,6 +338,7 @@ class _TimelineSectionState extends State<TimelineSection> {
                         ),
                       ),
                     ),
+                  ),
                   ),
                 ),
 
@@ -413,6 +476,7 @@ class _TimelineSectionState extends State<TimelineSection> {
   }
 
   Widget _buildVideoTrack(EditorViewModel viewModel) {
+    double runningStart = 0.0;
     return SizedBox(
       height: AppDimensions.videoTrackHeight,
       child: Row(
@@ -421,6 +485,8 @@ class _TimelineSectionState extends State<TimelineSection> {
           ...viewModel.videoClips.asMap().entries.map((entry) {
             final idx = entry.key;
             final clip = entry.value;
+            final clipStart = runningStart;
+            runningStart += clip.durationInSeconds;
             final isSelected = viewModel.selectedClipIndex == idx;
 
             final asset = viewModel.getAssetById(clip.assetId);
@@ -434,6 +500,19 @@ class _TimelineSectionState extends State<TimelineSection> {
               isSelected: isSelected,
               pixelsPerSecond: viewModel.pixelsPerSecond,
               onTap: () => viewModel.selectClip(idx),
+              onTapDown: (details) {
+                if (viewModel.isPlaying) viewModel.pause();
+                viewModel.selectClip(idx);
+                final offsetInClip = details.localPosition.dx / viewModel.pixelsPerSecond;
+                final targetTime = (clipStart + offsetInClip).clamp(0.0, viewModel.totalDurationInSeconds);
+                viewModel.seekTo(targetTime);
+                if (_horizontalScrollController.hasClients) {
+                  _horizontalScrollController.jumpTo(
+                    (targetTime * viewModel.pixelsPerSecond)
+                        .clamp(0.0, _horizontalScrollController.position.maxScrollExtent),
+                  );
+                }
+              },
               onTrimChanged: (newStart, newEnd) {
                 viewModel.updateClipTrim(idx, newStart, newEnd);
               },
@@ -614,6 +693,19 @@ class _TimelineSectionState extends State<TimelineSection> {
                 width: width,
                 child: GestureDetector(
                   onTap: () => viewModel.selectOverlay(idx),
+                  onTapDown: (details) {
+                    if (viewModel.isPlaying) viewModel.pause();
+                    viewModel.selectOverlay(idx);
+                    final targetTime = (overlay.startTimeInSeconds + (details.localPosition.dx / viewModel.pixelsPerSecond))
+                        .clamp(0.0, viewModel.totalDurationInSeconds);
+                    viewModel.seekTo(targetTime);
+                    if (_horizontalScrollController.hasClients) {
+                      _horizontalScrollController.jumpTo(
+                        (targetTime * viewModel.pixelsPerSecond)
+                            .clamp(0.0, _horizontalScrollController.position.maxScrollExtent),
+                      );
+                    }
+                  },
                   onHorizontalDragUpdate: (details) {
                     final deltaSec = details.primaryDelta! / viewModel.pixelsPerSecond;
                     final newStartSec = math.max(0.0, overlay.startTimeInSeconds + deltaSec);
@@ -796,6 +888,19 @@ class _TimelineSectionState extends State<TimelineSection> {
                 width: width,
                 child: GestureDetector(
                   onTap: () => viewModel.selectText(text.id),
+                  onTapDown: (details) {
+                    if (viewModel.isPlaying) viewModel.pause();
+                    viewModel.selectText(text.id);
+                    final targetTime = (text.startTimeInSeconds + (details.localPosition.dx / viewModel.pixelsPerSecond))
+                        .clamp(0.0, viewModel.totalDurationInSeconds);
+                    viewModel.seekTo(targetTime);
+                    if (_horizontalScrollController.hasClients) {
+                      _horizontalScrollController.jumpTo(
+                        (targetTime * viewModel.pixelsPerSecond)
+                            .clamp(0.0, _horizontalScrollController.position.maxScrollExtent),
+                      );
+                    }
+                  },
                   onHorizontalDragUpdate: (details) {
                     final deltaSec = details.primaryDelta! / viewModel.pixelsPerSecond;
                     final newStartSec = math.max(0.0, text.startTimeInSeconds + deltaSec);
@@ -915,6 +1020,19 @@ class _TimelineSectionState extends State<TimelineSection> {
                 width: width,
                 child: GestureDetector(
                   onTap: () => viewModel.selectSticker(sticker.id),
+                  onTapDown: (details) {
+                    if (viewModel.isPlaying) viewModel.pause();
+                    viewModel.selectSticker(sticker.id);
+                    final targetTime = (sticker.startTimeInSeconds + (details.localPosition.dx / viewModel.pixelsPerSecond))
+                        .clamp(0.0, viewModel.totalDurationInSeconds);
+                    viewModel.seekTo(targetTime);
+                    if (_horizontalScrollController.hasClients) {
+                      _horizontalScrollController.jumpTo(
+                        (targetTime * viewModel.pixelsPerSecond)
+                            .clamp(0.0, _horizontalScrollController.position.maxScrollExtent),
+                      );
+                    }
+                  },
                   onHorizontalDragUpdate: (details) {
                     final deltaSec = details.primaryDelta! / viewModel.pixelsPerSecond;
                     final newStartSec = math.max(0.0, sticker.startTimeInSeconds + deltaSec);
@@ -1011,18 +1129,79 @@ class _TimelineSectionState extends State<TimelineSection> {
     );
   }
 
-  Widget _buildAudioTrackRows(EditorViewModel viewModel) {
+  Widget _buildAudioTrackRows(EditorViewModel viewModel, double totalTrackWidth) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
-      children: viewModel.audioTracks.map((track) {
-        return AudioTrackItem(
-          key: ValueKey(track.id),
-          audioTrack: track,
-          pixelsPerSecond: viewModel.pixelsPerSecond,
-          viewModel: viewModel,
-        );
-      }).toList(),
+      children: [
+        ...viewModel.audioTracks.map((track) {
+          return AudioTrackItem(
+            key: ValueKey(track.id),
+            audioTrack: track,
+            pixelsPerSecond: viewModel.pixelsPerSecond,
+            viewModel: viewModel,
+          );
+        }),
+
+        // Real-time Voice Recording Progress Track
+        if (viewModel.isRecordingVoice)
+          Container(
+            width: totalTrackWidth,
+            height: 38,
+            margin: const EdgeInsets.symmetric(vertical: 2.0),
+            child: Stack(
+              children: [
+                Positioned(
+                  left: viewModel.recordingStartPlayhead * viewModel.pixelsPerSecond,
+                  top: 2,
+                  bottom: 2,
+                  width: math.max(20.0, viewModel.currentRecordingSeconds * viewModel.pixelsPerSecond),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.red.withValues(alpha: 0.25),
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: Colors.redAccent, width: 1.5),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.redAccent.withValues(alpha: 0.4),
+                          blurRadius: 8,
+                          spreadRadius: 1,
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: const BoxDecoration(
+                            color: Colors.redAccent,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Flexible(
+                          child: Text(
+                            '● REC ${viewModel.currentRecordingSeconds.toStringAsFixed(1)}s',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
     );
   }
 
@@ -1054,31 +1233,68 @@ class _TimelineSectionState extends State<TimelineSection> {
 
   Widget _buildPlayheadNeedle(double screenWidth) {
     return Positioned(
-      left: (screenWidth / 2) - (AppDimensions.playheadNeedleWidth / 2),
+      left: (screenWidth / 2) - 10,
       top: 0,
       bottom: 0,
-      width: AppDimensions.playheadNeedleWidth,
-      child: IgnorePointer(
+      width: 20,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onHorizontalDragStart: (details) {
+          if (widget.viewModel.isPlaying) widget.viewModel.pause();
+          _isUserScrollingHorizontal = true;
+        },
+        onHorizontalDragUpdate: (details) {
+          final deltaSec = (details.primaryDelta ?? 0.0) / widget.viewModel.pixelsPerSecond;
+          final newPlayhead = (widget.viewModel.playheadPosition + deltaSec)
+              .clamp(0.0, widget.viewModel.totalDurationInSeconds);
+          widget.viewModel.seekTo(newPlayhead);
+          if (_horizontalScrollController.hasClients) {
+            _horizontalScrollController.jumpTo(
+              (newPlayhead * widget.viewModel.pixelsPerSecond)
+                  .clamp(0.0, _horizontalScrollController.position.maxScrollExtent),
+            );
+          }
+        },
+        onHorizontalDragEnd: (details) {
+          _isUserScrollingHorizontal = false;
+          _lastSyncedPlayhead = widget.viewModel.playheadPosition;
+        },
+        onHorizontalDragCancel: () {
+          _isUserScrollingHorizontal = false;
+          _lastSyncedPlayhead = widget.viewModel.playheadPosition;
+        },
         child: Column(
           children: [
-            // Playhead Header Indicator Cap
-            Container(
-              width: 14,
-              height: 12,
-              decoration: const BoxDecoration(
-                color: AppColors.playheadHandle,
-                borderRadius: BorderRadius.vertical(bottom: Radius.circular(3)),
-              ),
-              child: const Center(
-                child: Icon(Icons.arrow_drop_down, size: 12, color: Colors.black),
+            // Playhead Header Indicator Cap (Mouse draggable handle)
+            MouseRegion(
+              cursor: SystemMouseCursors.resizeLeftRight,
+              child: Container(
+                width: 16,
+                height: 14,
+                decoration: BoxDecoration(
+                  color: AppColors.playheadHandle,
+                  borderRadius: const BorderRadius.vertical(bottom: Radius.circular(3)),
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppColors.primary.withValues(alpha: 0.5),
+                      blurRadius: 4,
+                      offset: const Offset(0, 1),
+                    ),
+                  ],
+                ),
+                child: const Center(
+                  child: Icon(Icons.arrow_drop_down, size: 14, color: Colors.black),
+                ),
               ),
             ),
 
             // Vertical White Playhead Line
             Expanded(
-              child: Container(
-                width: AppDimensions.playheadNeedleWidth,
-                color: AppColors.playheadLine,
+              child: Center(
+                child: Container(
+                  width: AppDimensions.playheadNeedleWidth,
+                  color: AppColors.playheadLine,
+                ),
               ),
             ),
           ],

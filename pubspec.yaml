@@ -13,6 +13,10 @@ dependencies:
   cupertino_icons: ^1.0.6
   uuid: ^4.6.0
   flutter_riverpod: ^3.4.3
+  file_picker: ^12.3.0
+  video_player: ^2.14.0
+  video_player_win: ^3.2.2
+  audioplayers: ^6.8.1
 
 dev_dependencies:
   flutter_test:
