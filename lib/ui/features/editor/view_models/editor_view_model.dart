@@ -36,6 +36,7 @@ import 'package:capcut_video_editor/domain/models/transition.dart';
 import 'package:capcut_video_editor/domain/services/transition_validator.dart';
 import 'package:flutter/services.dart';
 import 'package:capcut_video_editor/core/services/audio_beat_service.dart';
+import 'package:capcut_video_editor/core/services/auto_caption_service.dart';
 
 /// Result returned from every transition mutation.
 class TransitionMutationResult {
@@ -2673,6 +2674,134 @@ class EditorViewModel extends ChangeNotifier {
         isItalic: isItalic,
         isUnderline: isUnderline,
         shadowColor: shadowColor,
+      );
+      scheduleAutoSave();
+      notifyListeners();
+    }
+  }
+
+  // --- Auto / Animated Captions Methods ---
+
+  /// Generates a set of auto-synced animated subtitles from a script or preset genre
+  int generateAutoCaptions({
+    String? script,
+    String genre = 'Motivation',
+    CaptionStylePreset? preset,
+    TextAnimationType? animationType,
+    int wordsPerChunk = 3,
+    bool alignWithBeats = true,
+    bool clearExisting = false,
+  }) {
+    _saveSnapshot();
+    if (clearExisting) {
+      _textOverlays.clear();
+      _selectedTextId = null;
+    }
+
+    final effectivePreset = preset ?? CaptionStylePreset.defaultPreset;
+    final anim = animationType ?? effectivePreset.defaultAnimation;
+
+    // Collect beat timestamps if available
+    List<double>? beats;
+    if (alignWithBeats && selectedAudioTrack != null && selectedAudioTrack!.beats.isNotEmpty) {
+      beats = selectedAudioTrack!.visibleTimelineBeats;
+    } else if (alignWithBeats && audioTracks.isNotEmpty && audioTracks.first.beats.isNotEmpty) {
+      beats = audioTracks.first.visibleTimelineBeats;
+    }
+
+    final totalDuration = math.max(2.0, totalDurationInSeconds);
+
+    final generated = (script != null && script.trim().isNotEmpty)
+        ? AutoCaptionService.instance.generateFromScript(
+            script: script.trim(),
+            totalDurationInSeconds: totalDuration,
+            startTimelineOffsetSec: 0.0,
+            wordsPerChunk: wordsPerChunk,
+            preset: effectivePreset,
+            animationOverride: anim,
+            beatTimestamps: beats,
+          )
+        : AutoCaptionService.instance.generateTrending(
+            genre: genre,
+            totalDurationInSeconds: totalDuration,
+            startTimelineOffsetSec: 0.0,
+            wordsPerChunk: wordsPerChunk,
+            preset: effectivePreset,
+            animationOverride: anim,
+            beatTimestamps: beats,
+          );
+
+    if (generated.isNotEmpty) {
+      _textOverlays.addAll(generated);
+      _selectedTextId = generated.first.id;
+      scheduleAutoSave();
+      TtsService.announce('Generated ${generated.length} auto captions');
+      notifyListeners();
+    }
+
+    return generated.length;
+  }
+
+  /// Propagates the visual style, colors, stroke, and animation of [source] to all existing text overlays
+  void applyCaptionStyleToAll(TextOverlay source) {
+    if (_textOverlays.isEmpty) return;
+    _saveSnapshot();
+
+    for (int i = 0; i < _textOverlays.length; i++) {
+      final current = _textOverlays[i];
+      _textOverlays[i] = current.copyWith(
+        color: source.color,
+        fontSize: source.fontSize,
+        fontFamily: source.fontFamily,
+        backgroundColor: source.backgroundColor,
+        textAlign: source.textAlign,
+        isBold: source.isBold,
+        isItalic: source.isItalic,
+        isUnderline: source.isUnderline,
+        shadowColor: source.shadowColor,
+        animationType: source.animationType,
+        highlightColor: source.highlightColor,
+        strokeWidth: source.strokeWidth,
+        strokeColor: source.strokeColor,
+        position: source.position,
+      );
+    }
+
+    scheduleAutoSave();
+    TtsService.announce('Applied caption style to all subtitles');
+    notifyListeners();
+  }
+
+  /// Updates animation type and optional highlight color of a specific text overlay
+  void updateTextAnimation(
+    String id,
+    TextAnimationType animationType, {
+    Color? highlightColor,
+  }) {
+    final index = _textOverlays.indexWhere((t) => t.id == id);
+    if (index != -1) {
+      _saveSnapshot();
+      _textOverlays[index] = _textOverlays[index].copyWith(
+        animationType: animationType,
+        highlightColor: highlightColor ?? _textOverlays[index].highlightColor,
+      );
+      scheduleAutoSave();
+      notifyListeners();
+    }
+  }
+
+  /// Updates high-contrast outline stroke settings for a text overlay
+  void updateTextStroke(
+    String id, {
+    required double strokeWidth,
+    Color? strokeColor,
+  }) {
+    final index = _textOverlays.indexWhere((t) => t.id == id);
+    if (index != -1) {
+      _saveSnapshot();
+      _textOverlays[index] = _textOverlays[index].copyWith(
+        strokeWidth: strokeWidth,
+        strokeColor: strokeColor ?? _textOverlays[index].strokeColor,
       );
       scheduleAutoSave();
       notifyListeners();

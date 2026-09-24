@@ -1755,82 +1755,248 @@ class VideoPreviewSectionState extends State<VideoPreviewSection> {
 
   Widget _buildTextOverlay(TextOverlay text) {
     final isSelected = viewModel.selectedTextId == text.id;
+    final elapsedSec = viewModel.currentTimeInSeconds - text.startTimeInSeconds;
+
+    double scale = 1.0;
+    double slideY = 0.0;
+    double opacity = 1.0;
+
+    if (text.animationType == TextAnimationType.pop) {
+      final t = (elapsedSec / 0.22).clamp(0.0, 1.0);
+      scale = t < 1.0 ? (0.75 + 0.35 * math.sin(t * math.pi)) : 1.0;
+    } else if (text.animationType == TextAnimationType.fadeSlide) {
+      final t = (elapsedSec / 0.28).clamp(0.0, 1.0);
+      slideY = (1.0 - t) * 12.0;
+      opacity = t;
+    } else if (text.animationType == TextAnimationType.glowPulse) {
+      scale = 1.0 + 0.04 * math.sin(elapsedSec * 6.0);
+    }
 
     return Align(
       alignment: FractionalOffset(
         text.position.dx.clamp(0.05, 0.95),
         text.position.dy.clamp(0.05, 0.95),
       ),
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: () => viewModel.selectText(text.id),
-        onPanUpdate: (details) {
-          final newX = (text.position.dx + details.delta.dx / 300.0).clamp(0.05, 0.95);
-          final newY = (text.position.dy + details.delta.dy / 400.0).clamp(0.05, 0.95);
-          viewModel.updateTextPosition(text.id, Offset(newX, newY));
-        },
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-          margin: const EdgeInsets.symmetric(horizontal: 16),
-          decoration: BoxDecoration(
-            color: text.backgroundColor ?? Colors.black.withValues(alpha: 0.65),
-            borderRadius: BorderRadius.circular(AppDimensions.radiusSm),
-            border: Border.all(
-              color: isSelected ? AppColors.primary : text.color.withValues(alpha: 0.6),
-              width: isSelected ? 2.0 : 1.0,
-            ),
-            boxShadow: isSelected
-                ? [
-                    BoxShadow(
-                      color: AppColors.primary.withValues(alpha: 0.4),
-                      blurRadius: 8,
-                      spreadRadius: 1,
-                    )
-                  ]
-                : null,
-          ),
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              Text(
-                text.text,
-                textAlign: text.textAlign,
-                style: TextStyle(
-                  fontSize: text.fontSize,
-                  fontFamily: text.fontFamily,
-                  fontWeight: text.isBold ? FontWeight.w900 : FontWeight.w600,
-                  fontStyle: text.isItalic ? FontStyle.italic : FontStyle.normal,
-                  decoration: text.isUnderline ? TextDecoration.underline : TextDecoration.none,
-                  decorationColor: text.color,
-                  color: text.color,
-                  shadows: [
-                    Shadow(
-                      blurRadius: 6,
-                      color: text.shadowColor ?? Colors.black,
-                      offset: const Offset(1, 1),
-                    ),
+      child: Transform.translate(
+        offset: Offset(0, slideY),
+        child: Transform.scale(
+          scale: scale,
+          child: Opacity(
+            opacity: opacity.clamp(0.0, 1.0),
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => viewModel.selectText(text.id),
+              onPanUpdate: (details) {
+                final newX = (text.position.dx + details.delta.dx / 300.0).clamp(0.05, 0.95);
+                final newY = (text.position.dy + details.delta.dy / 400.0).clamp(0.05, 0.95);
+                viewModel.updateTextPosition(text.id, Offset(newX, newY));
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                margin: const EdgeInsets.symmetric(horizontal: 16),
+                decoration: BoxDecoration(
+                  color: text.backgroundColor ??
+                      (text.strokeWidth > 0 ? Colors.transparent : Colors.black.withValues(alpha: 0.65)),
+                  borderRadius: BorderRadius.circular(AppDimensions.radiusSm),
+                  border: Border.all(
+                    color: isSelected ? AppColors.primary : Colors.transparent,
+                    width: isSelected ? 2.0 : 0.0,
+                  ),
+                  boxShadow: isSelected
+                      ? [
+                          BoxShadow(
+                            color: AppColors.primary.withValues(alpha: 0.4),
+                            blurRadius: 8,
+                            spreadRadius: 1,
+                          )
+                        ]
+                      : null,
+                ),
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    _buildCaptionContent(text, elapsedSec),
+                    if (isSelected)
+                      Positioned(
+                        top: -14,
+                        right: -14,
+                        child: GestureDetector(
+                          onTap: () => viewModel.removeTextOverlay(text.id),
+                          child: Container(
+                            padding: const EdgeInsets.all(2),
+                            decoration: const BoxDecoration(
+                              color: AppColors.error,
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(Icons.close, size: 12, color: Colors.white),
+                          ),
+                        ),
+                      ),
                   ],
                 ),
               ),
-              if (isSelected)
-                Positioned(
-                  top: -14,
-                  right: -14,
-                  child: GestureDetector(
-                    onTap: () => viewModel.removeTextOverlay(text.id),
-                    child: Container(
-                      padding: const EdgeInsets.all(2),
-                      decoration: const BoxDecoration(
-                        color: AppColors.error,
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(Icons.close, size: 12, color: Colors.white),
-                    ),
-                  ),
-                ),
-            ],
+            ),
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildCaptionContent(TextOverlay text, double elapsedSec) {
+    if (text.animationType == TextAnimationType.karaoke) {
+      final words = text.effectiveWords;
+      if (words.isNotEmpty) {
+        final activeIdx = text.getActiveWordIndex(elapsedSec);
+
+        return Wrap(
+          alignment: WrapAlignment.center,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 6.0,
+          runSpacing: 4.0,
+          children: List.generate(words.length, (i) {
+            final w = words[i];
+            final isActive = i == activeIdx;
+            final isSpoken = i < activeIdx;
+            final activeColor = text.highlightColor ?? const Color(0xFFFFEB3B);
+            final wordColor = isActive
+                ? activeColor
+                : (isSpoken ? text.color : text.color.withValues(alpha: 0.88));
+
+            final wordText = _buildStrokedWord(
+              word: w.word,
+              textColor: wordColor,
+              strokeWidth: text.strokeWidth,
+              strokeColor: text.strokeColor ?? Colors.black,
+              fontSize: text.fontSize,
+              fontFamily: text.fontFamily,
+              isBold: text.isBold,
+              isItalic: text.isItalic,
+              isActive: isActive,
+              activeGlowColor: activeColor,
+            );
+
+            if (isActive) {
+              return Transform.scale(
+                scale: 1.12,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: Colors.black38,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: wordText,
+                ),
+              );
+            }
+
+            return wordText;
+          }),
+        );
+      }
+    }
+
+    if (text.animationType == TextAnimationType.typewriter) {
+      final totalLen = text.text.length;
+      final progress = (elapsedSec / text.durationInSeconds).clamp(0.0, 1.0);
+      final visibleChars = (progress * totalLen).ceil().clamp(0, totalLen);
+      final displayText = text.text.substring(0, visibleChars);
+      return _buildStrokedWord(
+        word: displayText,
+        textColor: text.color,
+        strokeWidth: text.strokeWidth,
+        strokeColor: text.strokeColor ?? Colors.black,
+        fontSize: text.fontSize,
+        fontFamily: text.fontFamily,
+        isBold: text.isBold,
+        isItalic: text.isItalic,
+        isActive: false,
+      );
+    }
+
+    // Default static or styled text
+    return _buildStrokedWord(
+      word: text.text,
+      textColor: text.color,
+      strokeWidth: text.strokeWidth,
+      strokeColor: text.strokeColor ?? Colors.black,
+      fontSize: text.fontSize,
+      fontFamily: text.fontFamily,
+      isBold: text.isBold,
+      isItalic: text.isItalic,
+      isActive: false,
+    );
+  }
+
+  Widget _buildStrokedWord({
+    required String word,
+    required Color textColor,
+    required double strokeWidth,
+    required Color strokeColor,
+    required double fontSize,
+    String? fontFamily,
+    required bool isBold,
+    required bool isItalic,
+    required bool isActive,
+    Color? activeGlowColor,
+  }) {
+    final style = TextStyle(
+      fontSize: fontSize,
+      fontFamily: fontFamily,
+      fontWeight: isBold ? FontWeight.w900 : FontWeight.w600,
+      fontStyle: isItalic ? FontStyle.italic : FontStyle.normal,
+      letterSpacing: 0.5,
+    );
+
+    if (strokeWidth > 0.0) {
+      return Stack(
+        alignment: Alignment.center,
+        children: [
+          // Background stroke outline
+          Text(
+            word,
+            style: style.copyWith(
+              foreground: Paint()
+                ..style = PaintingStyle.stroke
+                ..strokeWidth = strokeWidth * 2
+                ..color = strokeColor,
+            ),
+          ),
+          // Foreground fill text
+          Text(
+            word,
+            style: style.copyWith(
+              color: textColor,
+              shadows: isActive && activeGlowColor != null
+                  ? [
+                      Shadow(
+                        color: activeGlowColor.withValues(alpha: 0.85),
+                        blurRadius: 10,
+                      ),
+                    ]
+                  : null,
+            ),
+          ),
+        ],
+      );
+    }
+
+    return Text(
+      word,
+      style: style.copyWith(
+        color: textColor,
+        shadows: [
+          if (isActive && activeGlowColor != null)
+            Shadow(
+              color: activeGlowColor.withValues(alpha: 0.85),
+              blurRadius: 10,
+            )
+          else
+            const Shadow(
+              blurRadius: 4,
+              color: Colors.black87,
+              offset: Offset(1, 1),
+            ),
+        ],
       ),
     );
   }

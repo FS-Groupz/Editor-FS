@@ -8,6 +8,7 @@ import 'package:capcut_video_editor/ui/features/editor/views/widgets/export_moda
 import 'package:capcut_video_editor/ui/features/editor/views/widgets/media_picker_sheet.dart';
 import 'package:capcut_video_editor/ui/features/editor/views/widgets/speed_adjustment_sheet.dart';
 import 'package:capcut_video_editor/ui/features/editor/views/widgets/beat_options_sheet.dart';
+import 'package:capcut_video_editor/ui/features/editor/views/widgets/auto_captions_sheet.dart';
 
 /// Middle Action Toolbar containing Split, Trim Left/Right, Delete, Duplicate (with PIP option),
 /// Speed, Volume, Add Clip (Media Picker), and Export.
@@ -315,6 +316,17 @@ class ActionToolbar extends StatelessWidget {
                     } else {
                       viewModel.openDrawer(EditorCategory.edit);
                     }
+                  },
+                ),
+
+                // Auto Captions & Subtitle Styling Action
+                _buildActionButton(
+                  context: context,
+                  icon: Icons.subtitles_rounded,
+                  label: hasSelectedText ? 'Captions Style' : 'Auto Captions',
+                  enabled: true,
+                  onTap: () {
+                    AutoCaptionsSheet.show(context, viewModel);
                   },
                 ),
 
