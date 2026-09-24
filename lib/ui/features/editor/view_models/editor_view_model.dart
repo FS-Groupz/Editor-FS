@@ -9,6 +9,7 @@ import 'package:capcut_video_editor/domain/models/video_mask.dart';
 import 'package:capcut_video_editor/core/constants/app_dimensions.dart';
 import 'package:capcut_video_editor/core/services/asset_storage_service.dart';
 import 'package:capcut_video_editor/core/services/audio_playback_service.dart';
+import 'package:capcut_video_editor/core/services/audio_waveform_service.dart';
 import 'package:capcut_video_editor/core/services/video_playback_service.dart';
 import 'package:capcut_video_editor/domain/models/asset.dart';
 import 'package:capcut_video_editor/core/services/tts_service.dart';
@@ -1929,8 +1930,11 @@ class EditorViewModel extends ChangeNotifier {
 
   void addAudioTrackFromAsset(MediaAsset asset, {Duration? startTime}) {
     final duration = asset.duration ?? const Duration(seconds: 30);
-    final random = math.Random(asset.name.hashCode);
-    final waveform = List.generate(40, (_) => 0.2 + random.nextDouble() * 0.8);
+    final waveform = AudioWaveformService.instance.getWaveformSync(
+      cacheKey: asset.id,
+      localPath: asset.localPath,
+      duration: duration,
+    );
     final track = AudioTrack(
       id: 'audio_${DateTime.now().millisecondsSinceEpoch}',
       assetId: asset.id,
@@ -1967,8 +1971,11 @@ class EditorViewModel extends ChangeNotifier {
       notifyListeners();
     }
 
-    final random = math.Random(asset.id.hashCode);
-    final waveform = List.generate(40, (_) => 0.2 + random.nextDouble() * 0.8);
+    final waveform = AudioWaveformService.instance.getWaveformSync(
+      cacheKey: asset.id,
+      localPath: localPath,
+      duration: asset.duration,
+    );
 
     final track = AudioTrack(
       id: 'audio_asset_${DateTime.now().millisecondsSinceEpoch}',
@@ -2053,9 +2060,12 @@ class EditorViewModel extends ChangeNotifier {
       final clipStartSec = getClipStartTime(_selectedClipIndex!);
       final clipStartTime = Duration(milliseconds: (clipStartSec * 1000).round());
 
-      // Generate waveform
-      final random = math.Random(newAssetId.hashCode);
-      final waveform = List.generate(40, (_) => 0.2 + random.nextDouble() * 0.8);
+      // Generate / extract high-resolution waveform
+      final waveform = AudioWaveformService.instance.getWaveformSync(
+        cacheKey: newAssetId,
+        localPath: extractionResult.localPath,
+        duration: extractedAsset.duration ?? videoClip.originalDuration,
+      );
 
       final newTrack = AudioTrack(
         id: 'audio_extracted_${DateTime.now().millisecondsSinceEpoch}',
@@ -3356,8 +3366,8 @@ class EditorViewModel extends ChangeNotifier {
       );
       addMediaAsset(mediaAsset);
 
-      final random = math.Random(timestamp);
-      final waveform = List.generate(40, (_) => 0.3 + random.nextDouble() * 0.65);
+      // Parse genuine acoustic waveform from real PCM WAV bytes
+      final waveform = AudioWaveformService.instance.parseWavBytes(wavBytes);
       final track = AudioTrack(
         id: 'audio_rec_$timestamp',
         assetId: mediaAsset.id,

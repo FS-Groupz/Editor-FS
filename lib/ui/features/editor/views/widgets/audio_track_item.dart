@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:capcut_video_editor/core/constants/app_colors.dart';
 import 'package:capcut_video_editor/core/constants/app_dimensions.dart';
+import 'package:capcut_video_editor/core/services/audio_waveform_service.dart';
 import 'package:capcut_video_editor/domain/models/audio_track.dart';
 import 'package:capcut_video_editor/ui/features/editor/view_models/editor_view_model.dart';
 
@@ -25,6 +26,20 @@ class AudioTrackItem extends StatelessWidget {
     final startOffset = audioTrack.startTimeInSeconds * pixelsPerSecond;
     final isSelected = (viewModel.selectedAudioTrackId == audioTrack.id) ||
         (viewModel.isAudioSelected && viewModel.audioTracks.length == 1);
+
+    // Compute active playhead progress through this specific audio clip (0.0 to 1.0)
+    final trackStartSec = audioTrack.startTimeInSeconds;
+    final trackEndSec = audioTrack.endTimeInSeconds;
+    final currentPlayhead = viewModel.playheadPosition;
+    double playheadProgress = 0.0;
+    if (currentPlayhead <= trackStartSec) {
+      playheadProgress = 0.0;
+    } else if (currentPlayhead >= trackEndSec) {
+      playheadProgress = 1.0;
+    } else {
+      final activeSec = trackEndSec - trackStartSec;
+      playheadProgress = activeSec > 0 ? ((currentPlayhead - trackStartSec) / activeSec).clamp(0.0, 1.0) : 0.0;
+    }
 
     return Container(
       margin: EdgeInsets.only(left: startOffset, top: 4.0, bottom: 4.0),
@@ -67,16 +82,22 @@ class AudioTrackItem extends StatelessWidget {
           ),
           child: Stack(
             children: [
-              // 1. Audio Waveform Visualization
+              // 1. Audio Waveform Visualization (Trim-accurate, zoom-adaptive, volume-responsive)
               Positioned.fill(
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 6.0),
                   child: CustomPaint(
                     painter: _WaveformPainter(
                       points: audioTrack.waveformPoints,
-                      color: audioTrack.isMuted
-                          ? AppColors.textMuted.withValues(alpha: 0.3)
-                          : AppColors.audioTrackWaveform.withValues(alpha: 0.6),
+                      trimStart: audioTrack.trimStart,
+                      trimEnd: audioTrack.effectiveTrimEnd,
+                      totalDuration: audioTrack.duration,
+                      volume: audioTrack.volume,
+                      isMuted: audioTrack.isMuted,
+                      playheadProgress: playheadProgress,
+                      activeColor: AppColors.audioTrackWaveform,
+                      unplayedColor: AppColors.audioTrackWaveform.withValues(alpha: 0.55),
+                      mutedColor: AppColors.textMuted.withValues(alpha: 0.3),
                     ),
                   ),
                 ),
@@ -205,29 +226,99 @@ class AudioTrackItem extends StatelessWidget {
 
 class _WaveformPainter extends CustomPainter {
   final List<double> points;
-  final Color color;
+  final Duration trimStart;
+  final Duration trimEnd;
+  final Duration totalDuration;
+  final double volume;
+  final bool isMuted;
+  final double playheadProgress;
+  final Color activeColor;
+  final Color unplayedColor;
+  final Color mutedColor;
 
-  _WaveformPainter({required this.points, required this.color});
+  _WaveformPainter({
+    required this.points,
+    this.trimStart = Duration.zero,
+    Duration? trimEnd,
+    Duration? totalDuration,
+    this.volume = 1.0,
+    this.isMuted = false,
+    this.playheadProgress = 0.0,
+    Color? color,
+    Color? activeColor,
+    Color? unplayedColor,
+    Color? mutedColor,
+  })  : trimEnd = trimEnd ?? totalDuration ?? const Duration(seconds: 30),
+        totalDuration = totalDuration ?? trimEnd ?? const Duration(seconds: 30),
+        activeColor = activeColor ?? color ?? AppColors.audioTrackWaveform,
+        unplayedColor = unplayedColor ?? (color ?? AppColors.audioTrackWaveform).withValues(alpha: 0.55),
+        mutedColor = mutedColor ?? AppColors.textMuted.withValues(alpha: 0.3);
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (points.isEmpty) return;
+    if (size.width <= 0 || size.height <= 0) return;
 
-    final paint = Paint()
-      ..color = color
-      ..strokeWidth = 2.0
-      ..strokeCap = StrokeCap.round;
-
-    final step = size.width / (points.length * 2);
     final centerY = size.height / 2;
 
-    for (int i = 0; i < points.length; i++) {
-      final x = i * step * 2 + step;
-      final barHeight = (points[i] * size.height * 0.7).clamp(4.0, size.height);
+    // 1. Muted or Zero Volume Baseline
+    if (isMuted || volume <= 0.001) {
+      final linePaint = Paint()
+        ..color = mutedColor
+        ..strokeWidth = 1.2
+        ..strokeCap = StrokeCap.round;
+      canvas.drawLine(Offset(0, centerY), Offset(size.width, centerY), linePaint);
+      return;
+    }
+
+    // 2. Compute Physical Bar Layout (Constant 3.5px step for sleek density)
+    const barWidth = 2.0;
+    const barGap = 1.5;
+    const barStep = barWidth + barGap;
+    final barCount = (size.width / barStep).floor();
+    if (barCount <= 0) return;
+
+    // 3. Sliced & Zoom-Adaptive Resampling
+    final effectivePoints = points.isEmpty
+        ? AudioWaveformService.instance.generateOrganicWaveform(seedKey: 'fallback_${size.width.toInt()}')
+        : points;
+
+    final resampled = AudioWaveformService.instance.resampleSlicedWaveform(
+      fullWaveform: effectivePoints,
+      trimStart: trimStart,
+      trimEnd: trimEnd,
+      totalDuration: totalDuration,
+      barCount: barCount,
+    );
+
+    // 4. Dual-State Paint Setup
+    final activePaint = Paint()
+      ..color = activeColor
+      ..strokeWidth = barWidth
+      ..strokeCap = StrokeCap.round;
+
+    final unplayedPaint = Paint()
+      ..color = unplayedColor
+      ..strokeWidth = barWidth
+      ..strokeCap = StrokeCap.round;
+
+    final playheadX = (playheadProgress.clamp(0.0, 1.0) * size.width);
+
+    // 5. Draw Symmetrical Waveform Bars
+    final availableHalfHeight = (size.height / 2) - 2.0;
+    final effectiveVolume = volume.clamp(0.0, 1.0);
+
+    for (int i = 0; i < barCount; i++) {
+      final x = i * barStep + (barWidth / 2);
+      final rawAmp = resampled[i];
+      final scaledAmp = (rawAmp * effectiveVolume).clamp(0.04, 1.0);
+      final halfBarHeight = math.max(1.5, scaledAmp * availableHalfHeight);
+
+      final isPlayed = x <= playheadX;
+      final paint = isPlayed ? activePaint : unplayedPaint;
 
       canvas.drawLine(
-        Offset(x, centerY - barHeight / 2),
-        Offset(x, centerY + barHeight / 2),
+        Offset(x, centerY - halfBarHeight),
+        Offset(x, centerY + halfBarHeight),
         paint,
       );
     }
@@ -235,6 +326,14 @@ class _WaveformPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _WaveformPainter oldDelegate) {
-    return oldDelegate.points != points || oldDelegate.color != color;
+    return oldDelegate.points != points ||
+        oldDelegate.trimStart != trimStart ||
+        oldDelegate.trimEnd != trimEnd ||
+        oldDelegate.totalDuration != totalDuration ||
+        oldDelegate.volume != volume ||
+        oldDelegate.isMuted != isMuted ||
+        (oldDelegate.playheadProgress - playheadProgress).abs() > 0.005 ||
+        oldDelegate.activeColor != activeColor ||
+        oldDelegate.unplayedColor != unplayedColor;
   }
 }

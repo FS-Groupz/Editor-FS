@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:capcut_video_editor/core/constants/app_colors.dart';
 import 'package:capcut_video_editor/core/constants/app_dimensions.dart';
+import 'package:capcut_video_editor/core/services/audio_waveform_service.dart';
 import 'package:capcut_video_editor/core/utils/time_formatter.dart';
 import 'package:capcut_video_editor/domain/models/video_clip.dart';
 
@@ -274,8 +275,13 @@ if([T2]::E("${path.replaceAll(r'\', r'\\')}","${thumbPath.replaceAll(r'\', r'\\'
                       height: 24,
                       child: CustomPaint(
                         painter: _EmbeddedAudioWaveformPainter(
-                          seed: widget.clip.title.hashCode ^ widget.clip.originalDuration.inMilliseconds,
+                          assetId: widget.clip.assetId,
+                          localPath: widget.localPath,
+                          trimStart: widget.clip.trimStart,
+                          trimEnd: widget.clip.trimEnd,
+                          totalDuration: widget.clip.originalDuration,
                           volume: widget.clip.volume,
+                          isMuted: widget.clip.isMuted,
                         ),
                       ),
                     ),
@@ -511,14 +517,29 @@ if([T2]::E("${path.replaceAll(r'\', r'\\')}","${thumbPath.replaceAll(r'\', r'\\'
 }
 
 class _EmbeddedAudioWaveformPainter extends CustomPainter {
-  final int seed;
+  final String assetId;
+  final String? localPath;
+  final Duration trimStart;
+  final Duration trimEnd;
+  final Duration totalDuration;
   final double volume;
+  final bool isMuted;
 
-  _EmbeddedAudioWaveformPainter({required this.seed, required this.volume});
+  _EmbeddedAudioWaveformPainter({
+    required this.assetId,
+    this.localPath,
+    required this.trimStart,
+    required this.trimEnd,
+    required this.totalDuration,
+    required this.volume,
+    this.isMuted = false,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (volume <= 0.001) {
+    if (size.width <= 0 || size.height <= 0) return;
+
+    if (isMuted || volume <= 0.001) {
       final linePaint = Paint()
         ..color = Colors.white.withValues(alpha: 0.15)
         ..strokeWidth = 1.0;
@@ -526,19 +547,38 @@ class _EmbeddedAudioWaveformPainter extends CustomPainter {
       return;
     }
 
+    const barWidth = 2.0;
+    const barGap = 1.5;
+    const barSpacing = barWidth + barGap;
+    final barCount = (size.width / barSpacing).floor();
+    if (barCount <= 0) return;
+
+    final fullWaveform = AudioWaveformService.instance.getWaveformSync(
+      cacheKey: '${assetId}_${totalDuration.inMilliseconds}',
+      localPath: localPath,
+      duration: totalDuration,
+    );
+
+    final resampled = AudioWaveformService.instance.resampleSlicedWaveform(
+      fullWaveform: fullWaveform,
+      trimStart: trimStart,
+      trimEnd: trimEnd,
+      totalDuration: totalDuration,
+      barCount: barCount,
+    );
+
     final barPaint = Paint()
       ..color = const Color(0xFF00E5FF).withValues(alpha: 0.55)
       ..strokeCap = StrokeCap.round
-      ..strokeWidth = 1.8;
+      ..strokeWidth = barWidth;
 
-    final random = math.Random(seed);
-    const barSpacing = 3.5;
-    final barCount = (size.width / barSpacing).floor();
+    final effectiveVolume = volume.clamp(0.0, 1.0);
+    final availableHeight = size.height - 3.0;
 
     for (int i = 0; i < barCount; i++) {
-      final x = i * barSpacing + 1.0;
-      final wave = 0.25 + 0.75 * random.nextDouble();
-      final height = (wave * size.height * volume.clamp(0.0, 1.0)).clamp(2.0, size.height - 2.0);
+      final x = i * barSpacing + (barWidth / 2) + 1.0;
+      final amp = resampled[i] * effectiveVolume;
+      final height = (amp * availableHeight).clamp(2.0, availableHeight);
       final yTop = size.height - height;
       final yBottom = size.height - 1.0;
 
@@ -548,5 +588,11 @@ class _EmbeddedAudioWaveformPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _EmbeddedAudioWaveformPainter oldDelegate) =>
-      oldDelegate.seed != seed || oldDelegate.volume != volume;
+      oldDelegate.assetId != assetId ||
+      oldDelegate.localPath != localPath ||
+      oldDelegate.trimStart != trimStart ||
+      oldDelegate.trimEnd != trimEnd ||
+      oldDelegate.totalDuration != totalDuration ||
+      oldDelegate.volume != volume ||
+      oldDelegate.isMuted != isMuted;
 }

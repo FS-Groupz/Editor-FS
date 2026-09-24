@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:capcut_video_editor/core/constants/app_colors.dart';
 import 'package:capcut_video_editor/core/constants/app_dimensions.dart';
 import 'package:capcut_video_editor/core/services/asset_library_service.dart';
+import 'package:capcut_video_editor/core/services/audio_waveform_service.dart';
 import 'package:capcut_video_editor/domain/models/asset.dart';
 import 'package:capcut_video_editor/domain/models/audio_track.dart';
 import 'package:capcut_video_editor/domain/models/media_asset.dart';
@@ -47,8 +48,10 @@ class _AudioDrawerState extends State<AudioDrawer> with SingleTickerProviderStat
     required String assetId,
     String artist = 'Original Audio',
   }) {
-    final random = math.Random(title.hashCode);
-    final waveform = List.generate(40, (_) => 0.2 + random.nextDouble() * 0.8);
+    final waveform = AudioWaveformService.instance.getWaveformSync(
+      cacheKey: '${assetId}_$durationSec',
+      duration: Duration(seconds: durationSec),
+    );
 
     final track = AudioTrack(
       id: 'audio_${DateTime.now().millisecondsSinceEpoch}',
