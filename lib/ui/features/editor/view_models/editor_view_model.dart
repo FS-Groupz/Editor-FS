@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
-import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:capcut_video_editor/domain/models/keyframe.dart';
@@ -112,6 +111,15 @@ class EditorViewModel extends ChangeNotifier {
       initialProject: initialProject,
       enableMockFallback: true,
     );
+  }
+
+  void initForTesting() {
+    if (_videoClips.isEmpty) {
+      _videoClips = MockMediaRepository.getInitialVideoClips();
+      _selectedClipIndex = 0;
+    }
+    _textOverlays.clear();
+    notifyListeners();
   }
 
   StreamSubscription<VideoPositionEvent>? _videoPositionSubscription;
@@ -346,6 +354,7 @@ class EditorViewModel extends ChangeNotifier {
           : null;
 
   double get playheadPosition => _playheadPosition;
+  double get currentTimeInSeconds => _playheadPosition;
   bool get isPlaying => _isPlaying;
   bool get isLooping => _isLooping;
   double get pixelsPerSecond => _pixelsPerSecond;
@@ -1311,7 +1320,7 @@ class EditorViewModel extends ChangeNotifier {
 
     final original = _videoClips[_selectedClipIndex!];
     final clipStart = getClipStartTime(_selectedClipIndex!);
-    final asset = mediaLibrary[original.assetId];
+    final asset = mediaLibrary.where((a) => a.id == original.assetId).firstOrNull;
 
     final overlay = OverlayClip(
       id: 'overlay_${DateTime.now().millisecondsSinceEpoch}',
@@ -4006,45 +4015,17 @@ class EditorViewModel extends ChangeNotifier {
   }
 
   VideoKeyframe? getInterpolatedKeyframe(VideoClip clip, double currentClipTime) {
-    if (clip.keyframes.isEmpty) return null;
-    if (clip.keyframes.length == 1) return clip.keyframes.first;
-
-    if (currentClipTime <= clip.keyframes.first.timeInSeconds) {
-      return clip.keyframes.first;
-    }
-    if (currentClipTime >= clip.keyframes.last.timeInSeconds) {
-      return clip.keyframes.last;
-    }
-
-    for (int i = 0; i < clip.keyframes.length - 1; i++) {
-      final k1 = clip.keyframes[i];
-      final k2 = clip.keyframes[i + 1];
-      if (currentClipTime >= k1.timeInSeconds && currentClipTime <= k2.timeInSeconds) {
-        return VideoKeyframe.interpolate(k1, k2, currentClipTime);
-      }
-    }
-    return clip.keyframes.last;
+    return VideoKeyframe.interpolate(
+      keyframes: clip.keyframes,
+      timeInSeconds: currentClipTime,
+    );
   }
 
   VideoKeyframe? getInterpolatedOverlayKeyframe(OverlayClip overlay, double currentOverlayTime) {
-    if (overlay.keyframes.isEmpty) return null;
-    if (overlay.keyframes.length == 1) return overlay.keyframes.first;
-
-    if (currentOverlayTime <= overlay.keyframes.first.timeInSeconds) {
-      return overlay.keyframes.first;
-    }
-    if (currentOverlayTime >= overlay.keyframes.last.timeInSeconds) {
-      return overlay.keyframes.last;
-    }
-
-    for (int i = 0; i < overlay.keyframes.length - 1; i++) {
-      final k1 = overlay.keyframes[i];
-      final k2 = overlay.keyframes[i + 1];
-      if (currentOverlayTime >= k1.timeInSeconds && currentOverlayTime <= k2.timeInSeconds) {
-        return VideoKeyframe.interpolate(k1, k2, currentOverlayTime);
-      }
-    }
-    return overlay.keyframes.last;
+    return VideoKeyframe.interpolate(
+      keyframes: overlay.keyframes,
+      timeInSeconds: currentOverlayTime,
+    );
   }
 
   // ==========================================

@@ -41,16 +41,20 @@ class VideoKeyframe {
   final double opacity; // 0.0 to 1.0
   final KeyframeCurve curve;
 
-  const VideoKeyframe({
+  VideoKeyframe({
     required this.id,
-    required this.timestamp,
+    Duration? timestamp,
+    double? timeInSeconds,
     this.scale = 1.0,
     this.rotationDegrees = 0.0,
     this.positionX = 0.0,
     this.positionY = 0.0,
     this.opacity = 1.0,
     this.curve = KeyframeCurve.easeInOut,
-  });
+  }) : timestamp = timestamp ??
+            (timeInSeconds != null
+                ? Duration(microseconds: (timeInSeconds * 1000000).round())
+                : Duration.zero);
 
   double get timeInSeconds => timestamp.inMilliseconds / 1000.0;
 
@@ -76,8 +80,36 @@ class VideoKeyframe {
     );
   }
 
+  /// Linearly/cubically interpolates a timeline position from a list of keyframes.
+  static VideoKeyframe? interpolate({
+    required List<VideoKeyframe> keyframes,
+    required double timeInSeconds,
+  }) {
+    if (keyframes.isEmpty) return null;
+    if (keyframes.length == 1) return keyframes.first;
+
+    final sorted = List<VideoKeyframe>.from(keyframes)
+      ..sort((a, b) => a.timeInSeconds.compareTo(b.timeInSeconds));
+
+    if (timeInSeconds <= sorted.first.timeInSeconds) {
+      return sorted.first;
+    }
+    if (timeInSeconds >= sorted.last.timeInSeconds) {
+      return sorted.last;
+    }
+
+    for (int i = 0; i < sorted.length - 1; i++) {
+      final k1 = sorted[i];
+      final k2 = sorted[i + 1];
+      if (timeInSeconds >= k1.timeInSeconds && timeInSeconds <= k2.timeInSeconds) {
+        return interpolateBetween(k1, k2, timeInSeconds);
+      }
+    }
+    return sorted.last;
+  }
+
   /// Linearly/cubically interpolates between two adjacent keyframes
-  static VideoKeyframe interpolate(
+  static VideoKeyframe interpolateBetween(
     VideoKeyframe k1,
     VideoKeyframe k2,
     double currentClipTime,
@@ -134,3 +166,6 @@ class VideoKeyframe {
   String toString() =>
       'VideoKeyframe(time: ${timeInSeconds}s, scale: $scale, rot: $rotationDegrees, pos: ($positionX, $positionY), op: $opacity, curve: ${curve.name})';
 }
+
+/// Alias for backwards compatibility with keyframe tests and utilities
+typedef Keyframe = VideoKeyframe;

@@ -62,9 +62,9 @@ class ChromaKeyHelper {
     double smoothness = 0.10,
     double spill = 0.15,
   }) {
-    final r = keyColor.r;
-    final g = keyColor.g;
-    final b = keyColor.b;
+    final r = keyColor.red / 255.0;
+    final g = keyColor.green / 255.0;
+    final b = keyColor.blue / 255.0;
 
     // Determine primary keying channel
     final isGreen = g >= r && g >= b;

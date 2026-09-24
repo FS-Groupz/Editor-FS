@@ -6,6 +6,8 @@ import 'package:capcut_video_editor/ui/features/editor/view_models/editor_view_m
 import 'package:flutter/material.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   group('Keyframe Interpolation & Curve Tests', () {
     test('KeyframeCurve evaluations at boundaries and midpoint', () {
       // Linear
@@ -38,7 +40,7 @@ void main() {
 
     test('Keyframe.interpolate clamps to first/last keyframe when outside range', () {
       final kfs = [
-        const Keyframe(
+        Keyframe(
           id: 'kf1',
           timeInSeconds: 1.0,
           scale: 1.0,
@@ -47,7 +49,7 @@ void main() {
           positionY: 0.0,
           opacity: 1.0,
         ),
-        const Keyframe(
+        Keyframe(
           id: 'kf2',
           timeInSeconds: 3.0,
           scale: 2.0,
@@ -73,7 +75,7 @@ void main() {
 
     test('Keyframe.interpolate performs smooth cubic ease-in-out interpolation', () {
       final kfs = [
-        const Keyframe(
+        Keyframe(
           id: 'kf1',
           timeInSeconds: 0.0,
           scale: 1.0,
@@ -83,7 +85,7 @@ void main() {
           opacity: 1.0,
           curve: KeyframeCurve.easeInOut,
         ),
-        const Keyframe(
+        Keyframe(
           id: 'kf2',
           timeInSeconds: 2.0,
           scale: 2.0,
@@ -188,7 +190,7 @@ void main() {
       // Now seek to 3.0s and edit spatial transform (pan/zoom on canvas)
       viewModel.seekTo(3.0);
       viewModel.updateClipTransform(
-        0,
+        viewModel.videoClips[0].id,
         xPos: 50.0,
         yPos: -20.0,
         scale: 1.5,
@@ -205,7 +207,7 @@ void main() {
     });
 
     test('getInterpolatedOverlayKeyframe correctly animates OverlayClip PIP layers', () {
-      const overlay = OverlayClip(
+      final overlay = OverlayClip(
         id: 'overlay_1',
         title: 'PIP Test',
         startTime: Duration(seconds: 0),

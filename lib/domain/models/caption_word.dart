@@ -35,7 +35,7 @@ class CaptionWord {
       'word': word,
       'startOffsetSec': startOffsetSec,
       'durationSec': durationSec,
-      'customColorValue': customColor?.toARGB32(),
+      'customColorValue': customColor?.value,
     };
   }
 

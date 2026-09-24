@@ -327,7 +327,7 @@ class DeviceMediaService {
 
       final localPath = asset.localPath;
       final isPhoto = asset.isPhoto;
-      final colorVal = clip.previewGradient.isNotEmpty ? clip.previewGradient.first.toARGB32() : 0xFF00C9FF;
+      final colorVal = clip.previewGradient.isNotEmpty ? clip.previewGradient.first.value : 0xFF00C9FF;
 
       clipsPayload.add({
         'id': clip.id,
@@ -400,8 +400,8 @@ class DeviceMediaService {
         'startTimeMs': text.startTime.inMilliseconds,
         'durationMs': text.effectiveDuration.inMilliseconds,
         'fontSize': text.fontSize,
-        'textColor': text.color.toARGB32(),
-        'backgroundColor': text.backgroundColor?.toARGB32(),
+        'textColor': text.color.value,
+        'backgroundColor': text.backgroundColor?.value,
         'x': text.position.dx,
         'y': text.position.dy,
         'isBold': text.isBold,
@@ -493,23 +493,23 @@ class DeviceMediaService {
           ];
         }
 
-        final pickedFile = await FilePicker.pickFile(
+        final pickedResult = await FilePicker.platform.pickFiles(
           type: FileType.custom,
           allowedExtensions: allowed,
         );
 
-        if (pickedFile == null) {
+        if (pickedResult == null || pickedResult.files.isEmpty) {
           return null;
         }
 
-        final localPath = pickedFile.path;
+        final localPath = pickedResult.files.single.path;
         if (localPath == null || localPath.trim().isEmpty) return null;
         final file = File(localPath);
         if (!file.existsSync()) return null;
 
-        final name = pickedFile.name;
+        final name = pickedResult.files.single.name;
         final sizeBytes = file.lengthSync();
-        final ext = pickedFile.extension?.toLowerCase() ?? '';
+        final ext = pickedResult.files.single.extension?.toLowerCase() ?? '';
         final isPhoto = ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'gif'].contains(ext);
         final assetType = isPhoto ? MediaAssetType.photo : MediaAssetType.video;
         final duration = isPhoto ? const Duration(seconds: 4) : const Duration(seconds: 10);
@@ -622,21 +622,21 @@ class DeviceMediaService {
   static Future<MediaAsset?> pickAudioAsset() async {
     if (!kIsWeb && (Platform.isWindows || Platform.isMacOS || Platform.isLinux)) {
       try {
-        final pickedFile = await FilePicker.pickFile(
+        final pickedResult = await FilePicker.platform.pickFiles(
           type: FileType.custom,
           allowedExtensions: ['mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'wma'],
         );
 
-        if (pickedFile == null) {
+        if (pickedResult == null || pickedResult.files.isEmpty) {
           return null;
         }
 
-        final localPath = pickedFile.path;
+        final localPath = pickedResult.files.single.path;
         if (localPath == null || localPath.trim().isEmpty) return null;
         final file = File(localPath);
         if (!file.existsSync()) return null;
 
-        final name = pickedFile.name;
+        final name = pickedResult.files.single.name;
         final sizeBytes = file.lengthSync();
 
         final asset = MediaAsset(

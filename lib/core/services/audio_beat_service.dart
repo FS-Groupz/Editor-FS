@@ -1,5 +1,4 @@
 import 'dart:math' as math;
-import 'package:flutter/foundation.dart';
 
 /// Sensitivity presets for automated rhythmic beat detection
 enum BeatSensitivity {

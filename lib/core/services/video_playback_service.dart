@@ -194,7 +194,7 @@ class VideoPlaybackService {
         }
 
         // ignore: invalid_use_of_visible_for_testing_member
-        final textureId = controller.playerId;
+        final textureId = controller.textureId;
         final duration = controller.value.duration;
         final width = controller.value.size.width.toInt();
         final height = controller.value.size.height.toInt();
