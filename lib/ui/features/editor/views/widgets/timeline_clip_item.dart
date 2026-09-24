@@ -21,6 +21,9 @@ class TimelineClipItem extends StatefulWidget {
   final VoidCallback onTap;
   final ValueChanged<TapDownDetails>? onTapDown;
   final Function(Duration newTrimStart, Duration newTrimEnd) onTrimChanged;
+  final double? clipStartTime;
+  final double? currentPlayheadTime;
+  final ValueChanged<Keyframe>? onKeyframeTap;
 
   const TimelineClipItem({
     super.key,
@@ -34,6 +37,9 @@ class TimelineClipItem extends StatefulWidget {
     required this.onTap,
     this.onTapDown,
     required this.onTrimChanged,
+    this.clipStartTime,
+    this.currentPlayheadTime,
+    this.onKeyframeTap,
   });
 
   @override
@@ -478,21 +484,58 @@ if([T2]::E("${path.replaceAll(r'\', r'\\')}","${thumbPath.replaceAll(r'\', r'\\'
                 ),
               ),
 
-            // 4. Keyframe Diamond Markers
+            // 4. Keyframe Diamond Markers (CapCut Golden Diamonds with active playhead glow & tap-to-seek)
             ...widget.clip.keyframes.map((kf) {
               final kfRatio = widget.clip.durationInSeconds > 0 ? (kf.timeInSeconds / widget.clip.durationInSeconds) : 0.0;
-              final kfX = (kfRatio * clipWidth).clamp(0.0, math.max(0.0, clipWidth - 8)).toDouble();
+              final kfX = (kfRatio * clipWidth).clamp(0.0, math.max(0.0, clipWidth - 10)).toDouble();
+              final isKeyframeActive = widget.currentPlayheadTime != null && widget.clipStartTime != null
+                  ? ((widget.clipStartTime! + kf.timeInSeconds) - widget.currentPlayheadTime!).abs() < 0.08
+                  : false;
+
               return Positioned(
-                left: kfX,
-                top: 4,
-                child: Container(
-                  width: 8,
-                  height: 8,
-                  decoration: BoxDecoration(
-                    color: AppColors.primary,
-                    border: Border.all(color: Colors.white, width: 1),
+                left: (kfX - 7).clamp(0.0, math.max(0.0, clipWidth - 14)),
+                top: 3,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () {
+                    if (widget.onKeyframeTap != null) {
+                      widget.onKeyframeTap!(kf);
+                    }
+                  },
+                  child: SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: Center(
+                      child: Container(
+                        width: isKeyframeActive ? 11 : 8.5,
+                        height: isKeyframeActive ? 11 : 8.5,
+                        decoration: BoxDecoration(
+                          color: isKeyframeActive ? const Color(0xFFFFEA00) : const Color(0xFFFFD600),
+                          border: Border.all(
+                            color: isKeyframeActive ? Colors.white : Colors.black87,
+                            width: isKeyframeActive ? 1.5 : 1.0,
+                          ),
+                          boxShadow: isKeyframeActive
+                              ? [
+                                  BoxShadow(
+                                    color: const Color(0xFFFFD600).withValues(alpha: 0.85),
+                                    blurRadius: 6,
+                                    spreadRadius: 2,
+                                  ),
+                                ]
+                              : [
+                                  const BoxShadow(
+                                    color: Colors.black54,
+                                    blurRadius: 2,
+                                    offset: Offset(0, 1),
+                                  ),
+                                ],
+                        ),
+                        transform: Matrix4.rotationZ(0.785398),
+                        transformAlignment: Alignment.center,
+                      ),
+                    ),
                   ),
-                  transform: Matrix4.rotationZ(0.785398),
                 ),
               );
             }),

@@ -21,6 +21,7 @@ class InteractiveTransformCanvas extends StatelessWidget {
   final bool isSelected;
   final EditorViewModel viewModel;
   final Widget child;
+  final ClipSpatialTransform? overrideTransform;
 
   const InteractiveTransformCanvas({
     super.key,
@@ -28,6 +29,7 @@ class InteractiveTransformCanvas extends StatelessWidget {
     required this.isSelected,
     required this.viewModel,
     required this.child,
+    this.overrideTransform,
   });
 
   @override
@@ -38,6 +40,7 @@ class InteractiveTransformCanvas extends StatelessWidget {
       isSelected: isSelected,
       viewModel: viewModel,
       child: child,
+      overrideTransform: overrideTransform,
     );
     if (!hasScope) {
       return ProviderScope(child: content);
@@ -51,12 +54,14 @@ class _InteractiveTransformCanvasContent extends ConsumerStatefulWidget {
   final bool isSelected;
   final EditorViewModel viewModel;
   final Widget child;
+  final ClipSpatialTransform? overrideTransform;
 
   const _InteractiveTransformCanvasContent({
     required this.clip,
     required this.isSelected,
     required this.viewModel,
     required this.child,
+    this.overrideTransform,
   });
 
   @override
@@ -99,7 +104,8 @@ class _InteractiveTransformCanvasContentState extends ConsumerState<_Interactive
   void _onScaleStart(ScaleStartDetails details) {
     if (!widget.isSelected) return;
 
-    final current = ref.read(spatialTransformMapProvider.notifier).getTransform(
+    final current = widget.overrideTransform ??
+        ref.read(spatialTransformMapProvider.notifier).getTransform(
           widget.clip.id,
           ClipSpatialTransform.fromClip(widget.clip),
         );
@@ -284,7 +290,10 @@ class _InteractiveTransformCanvasContentState extends ConsumerState<_Interactive
   @override
   Widget build(BuildContext context) {
     // Pure derivation: VideoClip spatial state -> initial provider state -> widget reads provider state
-    final effectiveTransform = ref.watch(clipSpatialTransformFromClipProvider(widget.clip));
+    final currentProviderTransform = ref.watch(clipSpatialTransformFromClipProvider(widget.clip));
+    final effectiveTransform = _isInteracting
+        ? currentProviderTransform
+        : (widget.overrideTransform ?? currentProviderTransform);
 
     final matrix = effectiveTransform.toMatrix4(
       legacyRotationDegrees: widget.clip.rotationDegrees,

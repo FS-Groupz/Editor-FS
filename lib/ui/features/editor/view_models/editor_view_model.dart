@@ -1752,12 +1752,52 @@ class EditorViewModel extends ChangeNotifier {
     }
 
     if (recordUndo) _saveSnapshot();
+
+    // Auto-update or auto-create keyframe if keyframes are active on this clip
+    List<VideoKeyframe> updatedKeyframes = clip.keyframes;
+    if (clip.keyframes.isNotEmpty) {
+      final clipStart = getClipStartTime(index);
+      final relTime = (_playheadPosition - clipStart).clamp(0.0, clip.durationInSeconds);
+      final existingKfIndex = clip.keyframes.indexWhere(
+        (k) => (k.timeInSeconds - relTime).abs() < 0.08,
+      );
+
+      final totalRotationDeg = clip.rotationDegrees.toDouble() + (sanitizedRotation * 180.0 / math.pi);
+
+      if (existingKfIndex != -1) {
+        final existing = clip.keyframes[existingKfIndex];
+        final modified = existing.copyWith(
+          scale: sanitizedScale,
+          positionX: sanitizedX,
+          positionY: sanitizedY,
+          rotationDegrees: totalRotationDeg,
+        );
+        updatedKeyframes = List<VideoKeyframe>.from(clip.keyframes);
+        updatedKeyframes[existingKfIndex] = modified;
+      } else {
+        final newKf = VideoKeyframe(
+          id: 'kf_${DateTime.now().millisecondsSinceEpoch}',
+          timestamp: Duration(milliseconds: (relTime * 1000).round()),
+          scale: sanitizedScale,
+          positionX: sanitizedX,
+          positionY: sanitizedY,
+          rotationDegrees: totalRotationDeg,
+          opacity: clip.opacity,
+          curve: KeyframeCurve.easeInOut,
+        );
+        updatedKeyframes = List<VideoKeyframe>.from(clip.keyframes)..add(newKf);
+        updatedKeyframes.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+      }
+    }
+
     _videoClips[index] = clip.copyWith(
       xPos: sanitizedX,
       yPos: sanitizedY,
       scale: sanitizedScale,
       rotationAngle: sanitizedRotation,
+      keyframes: updatedKeyframes,
     );
+    scheduleAutoSave();
     notifyListeners();
   }
 
@@ -3573,12 +3613,76 @@ class EditorViewModel extends ChangeNotifier {
   // ==========================================
   // KEYFRAME ANIMATION SYSTEM
   // ==========================================
+
+  /// Checks if a keyframe exists at the current playhead position for the selected clip or overlay
   bool get hasKeyframeAtPlayhead {
-    final clip = selectedClip;
-    if (clip == null) return false;
-    final clipStart = selectedClipStartTime;
-    final relTime = _playheadPosition - clipStart;
-    return clip.keyframes.any((k) => (k.timeInSeconds - relTime).abs() < 0.08);
+    if (selectedClip != null) {
+      final clip = selectedClip!;
+      final clipStart = selectedClipStartTime;
+      final relTime = _playheadPosition - clipStart;
+      return clip.keyframes.any((k) => (k.timeInSeconds - relTime).abs() < 0.08);
+    } else if (selectedOverlay != null) {
+      final overlay = selectedOverlay!;
+      final relTime = _playheadPosition - overlay.startTimeInSeconds;
+      return overlay.keyframes.any((k) => (k.timeInSeconds - relTime).abs() < 0.08);
+    }
+    return false;
+  }
+
+  /// Total keyframe count for the currently selected item
+  int get currentKeyframeCount {
+    if (selectedClip != null) return selectedClip!.keyframes.length;
+    if (selectedOverlay != null) return selectedOverlay!.keyframes.length;
+    return 0;
+  }
+
+  /// Whether a keyframe exists before the current playhead
+  bool get hasPreviousKeyframe {
+    final times = _getActiveTimelineKeyframeTimes();
+    return times.any((t) => t < _playheadPosition - 0.05);
+  }
+
+  /// Whether a keyframe exists after the current playhead
+  bool get hasNextKeyframe {
+    final times = _getActiveTimelineKeyframeTimes();
+    return times.any((t) => t > _playheadPosition + 0.05);
+  }
+
+  List<double> _getActiveTimelineKeyframeTimes() {
+    if (selectedClip != null) {
+      final clipStart = selectedClipStartTime;
+      return selectedClip!.keyframes
+          .map((k) => clipStart + k.timeInSeconds)
+          .toList()
+        ..sort();
+    } else if (selectedOverlay != null) {
+      final overlayStart = selectedOverlay!.startTimeInSeconds;
+      return selectedOverlay!.keyframes
+          .map((k) => overlayStart + k.timeInSeconds)
+          .toList()
+        ..sort();
+    }
+    return const [];
+  }
+
+  /// Jumps playhead to the nearest keyframe preceding current playhead position
+  void jumpToPreviousKeyframe() {
+    final times = _getActiveTimelineKeyframeTimes();
+    final prevTimes = times.where((t) => t < _playheadPosition - 0.05).toList();
+    if (prevTimes.isNotEmpty) {
+      seekTo(prevTimes.last);
+      HapticFeedback.selectionClick();
+    }
+  }
+
+  /// Jumps playhead to the nearest keyframe following current playhead position
+  void jumpToNextKeyframe() {
+    final times = _getActiveTimelineKeyframeTimes();
+    final nextTimes = times.where((t) => t > _playheadPosition + 0.05).toList();
+    if (nextTimes.isNotEmpty) {
+      seekTo(nextTimes.first);
+      HapticFeedback.selectionClick();
+    }
   }
 
   void toggleKeyframeAtPlayhead() {
@@ -3590,42 +3694,93 @@ class EditorViewModel extends ChangeNotifier {
   }
 
   void addKeyframeAtPlayhead() {
-    if (_selectedClipIndex == null) return;
-    final clip = _videoClips[_selectedClipIndex!];
-    final clipStart = selectedClipStartTime;
-    final relTime = (_playheadPosition - clipStart).clamp(0.0, clip.durationInSeconds);
+    _saveSnapshot();
+    if (_selectedClipIndex != null) {
+      final clip = _videoClips[_selectedClipIndex!];
+      final clipStart = selectedClipStartTime;
+      final relTime = (_playheadPosition - clipStart).clamp(0.0, clip.durationInSeconds);
 
-    final newKeyframe = VideoKeyframe(
-      id: 'kf_${DateTime.now().millisecondsSinceEpoch}',
-      timestamp: Duration(milliseconds: (relTime * 1000).round()),
-      scale: 1.0,
-      rotationDegrees: clip.rotationDegrees.toDouble(),
-      positionX: 0.0,
-      positionY: 0.0,
-      opacity: clip.opacity,
-    );
+      final totalRotationDeg = clip.rotationDegrees.toDouble() + (clip.rotationAngle * 180.0 / math.pi);
 
-    final updated = List<VideoKeyframe>.from(
-      clip.keyframes.where((k) => (k.timeInSeconds - relTime).abs() >= 0.08),
-    )..add(newKeyframe);
-    updated.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+      final newKeyframe = VideoKeyframe(
+        id: 'kf_${DateTime.now().millisecondsSinceEpoch}',
+        timestamp: Duration(milliseconds: (relTime * 1000).round()),
+        scale: clip.scale,
+        rotationDegrees: totalRotationDeg,
+        positionX: clip.xPos,
+        positionY: clip.yPos,
+        opacity: clip.opacity,
+        curve: KeyframeCurve.easeInOut,
+      );
 
-    _videoClips[_selectedClipIndex!] = clip.copyWith(keyframes: updated);
-    notifyListeners();
+      final updated = List<VideoKeyframe>.from(
+        clip.keyframes.where((k) => (k.timeInSeconds - relTime).abs() >= 0.08),
+      )..add(newKeyframe);
+      updated.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+
+      _videoClips[_selectedClipIndex!] = clip.copyWith(keyframes: updated);
+      HapticFeedback.mediumImpact();
+      scheduleAutoSave();
+      TtsService.announce('Added keyframe at ${(relTime).toStringAsFixed(1)} seconds');
+      notifyListeners();
+    } else if (_selectedOverlayIndex != null && _selectedOverlayIndex! < _overlayClips.length) {
+      final overlay = _overlayClips[_selectedOverlayIndex!];
+      final relTime = (_playheadPosition - overlay.startTimeInSeconds).clamp(0.0, overlay.durationInSeconds);
+
+      final newKeyframe = VideoKeyframe(
+        id: 'kf_${DateTime.now().millisecondsSinceEpoch}',
+        timestamp: Duration(milliseconds: (relTime * 1000).round()),
+        scale: overlay.scale,
+        rotationDegrees: overlay.rotation * 180.0 / math.pi,
+        positionX: overlay.position.dx,
+        positionY: overlay.position.dy,
+        opacity: overlay.opacity,
+        curve: KeyframeCurve.easeInOut,
+      );
+
+      final updated = List<VideoKeyframe>.from(
+        overlay.keyframes.where((k) => (k.timeInSeconds - relTime).abs() >= 0.08),
+      )..add(newKeyframe);
+      updated.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+
+      _overlayClips[_selectedOverlayIndex!] = overlay.copyWith(keyframes: updated);
+      HapticFeedback.mediumImpact();
+      scheduleAutoSave();
+      TtsService.announce('Added PIP keyframe at ${(relTime).toStringAsFixed(1)} seconds');
+      notifyListeners();
+    }
   }
 
   void removeKeyframeAtPlayhead() {
-    if (_selectedClipIndex == null) return;
-    final clip = _videoClips[_selectedClipIndex!];
-    final clipStart = selectedClipStartTime;
-    final relTime = _playheadPosition - clipStart;
+    _saveSnapshot();
+    if (_selectedClipIndex != null) {
+      final clip = _videoClips[_selectedClipIndex!];
+      final clipStart = selectedClipStartTime;
+      final relTime = _playheadPosition - clipStart;
 
-    final updated = List<VideoKeyframe>.from(
-      clip.keyframes.where((k) => (k.timeInSeconds - relTime).abs() >= 0.08),
-    );
+      final updated = List<VideoKeyframe>.from(
+        clip.keyframes.where((k) => (k.timeInSeconds - relTime).abs() >= 0.08),
+      );
 
-    _videoClips[_selectedClipIndex!] = clip.copyWith(keyframes: updated);
-    notifyListeners();
+      _videoClips[_selectedClipIndex!] = clip.copyWith(keyframes: updated);
+      HapticFeedback.lightImpact();
+      scheduleAutoSave();
+      TtsService.announce('Removed keyframe');
+      notifyListeners();
+    } else if (_selectedOverlayIndex != null && _selectedOverlayIndex! < _overlayClips.length) {
+      final overlay = _overlayClips[_selectedOverlayIndex!];
+      final relTime = _playheadPosition - overlay.startTimeInSeconds;
+
+      final updated = List<VideoKeyframe>.from(
+        overlay.keyframes.where((k) => (k.timeInSeconds - relTime).abs() >= 0.08),
+      );
+
+      _overlayClips[_selectedOverlayIndex!] = overlay.copyWith(keyframes: updated);
+      HapticFeedback.lightImpact();
+      scheduleAutoSave();
+      TtsService.announce('Removed PIP keyframe');
+      notifyListeners();
+    }
   }
 
   VideoKeyframe? getInterpolatedKeyframe(VideoClip clip, double currentClipTime) {
@@ -3643,21 +3798,31 @@ class EditorViewModel extends ChangeNotifier {
       final k1 = clip.keyframes[i];
       final k2 = clip.keyframes[i + 1];
       if (currentClipTime >= k1.timeInSeconds && currentClipTime <= k2.timeInSeconds) {
-        final diff = k2.timeInSeconds - k1.timeInSeconds;
-        final t = diff <= 0.0001 ? 0.0 : (currentClipTime - k1.timeInSeconds) / diff;
-
-        return VideoKeyframe(
-          id: 'interpolated',
-          timestamp: Duration(milliseconds: (currentClipTime * 1000).round()),
-          scale: ui.lerpDouble(k1.scale, k2.scale, t) ?? k1.scale,
-          rotationDegrees: ui.lerpDouble(k1.rotationDegrees, k2.rotationDegrees, t) ?? k1.rotationDegrees,
-          positionX: ui.lerpDouble(k1.positionX, k2.positionX, t) ?? k1.positionX,
-          positionY: ui.lerpDouble(k1.positionY, k2.positionY, t) ?? k1.positionY,
-          opacity: ui.lerpDouble(k1.opacity, k2.opacity, t) ?? k1.opacity,
-        );
+        return VideoKeyframe.interpolate(k1, k2, currentClipTime);
       }
     }
     return clip.keyframes.last;
+  }
+
+  VideoKeyframe? getInterpolatedOverlayKeyframe(OverlayClip overlay, double currentOverlayTime) {
+    if (overlay.keyframes.isEmpty) return null;
+    if (overlay.keyframes.length == 1) return overlay.keyframes.first;
+
+    if (currentOverlayTime <= overlay.keyframes.first.timeInSeconds) {
+      return overlay.keyframes.first;
+    }
+    if (currentOverlayTime >= overlay.keyframes.last.timeInSeconds) {
+      return overlay.keyframes.last;
+    }
+
+    for (int i = 0; i < overlay.keyframes.length - 1; i++) {
+      final k1 = overlay.keyframes[i];
+      final k2 = overlay.keyframes[i + 1];
+      if (currentOverlayTime >= k1.timeInSeconds && currentOverlayTime <= k2.timeInSeconds) {
+        return VideoKeyframe.interpolate(k1, k2, currentOverlayTime);
+      }
+    }
+    return overlay.keyframes.last;
   }
 
   // ==========================================

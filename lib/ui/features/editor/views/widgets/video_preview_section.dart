@@ -1315,7 +1315,8 @@ class VideoPreviewSectionState extends State<VideoPreviewSection> {
 
     double clipTime = 0.0;
     if (activeClip is VideoClip) {
-      clipTime = (viewModel.playheadPosition - viewModel.selectedClipStartTime).clamp(0.0, activeClip.durationInSeconds);
+      final activeClipStart = viewModel.activeClipStartTimeAtPlayhead;
+      clipTime = (viewModel.playheadPosition - activeClipStart).clamp(0.0, activeClip.durationInSeconds);
     }
     final VideoKeyframe? keyframe = activeClip is VideoClip ? viewModel.getInterpolatedKeyframe(activeClip, clipTime) : null;
     final animScale = keyframe?.scale ?? 1.0;
@@ -1323,6 +1324,16 @@ class VideoPreviewSectionState extends State<VideoPreviewSection> {
     final animPosX = keyframe?.positionX ?? 0.0;
     final animPosY = keyframe?.positionY ?? 0.0;
     final animOpacity = (keyframe?.opacity ?? (activeClip.opacity as num).toDouble()).clamp(0.0, 1.0);
+
+    final ClipSpatialTransform? keyframeTransform = (activeClip is VideoClip && activeClip.keyframes.isNotEmpty && keyframe != null)
+        ? ClipSpatialTransform(
+            clipId: activeClip.id,
+            xPos: animPosX,
+            yPos: animPosY,
+            scale: animScale,
+            rotationAngle: animRotation * math.pi / 180.0,
+          )
+        : null;
 
     Widget visualChild = Opacity(
       opacity: animOpacity,
@@ -1350,28 +1361,13 @@ class VideoPreviewSectionState extends State<VideoPreviewSection> {
     final isSelected = activeClip is VideoClip && activeClip.id == viewModel.selectedClipId;
 
     Widget videoContent;
-    if (activeClip is VideoClip && activeClip.keyframes.isNotEmpty && keyframe != null) {
-      videoContent = Transform.translate(
-        offset: Offset(animPosX, animPosY),
-        child: Transform(
-          alignment: Alignment.center,
-          transform: Matrix4.identity()
-            ..rotateZ(animRotation * math.pi / 180)
-            ..scaleByDouble(
-              (activeClip.flipHorizontal ? -1.0 : 1.0) * animScale,
-              (activeClip.flipVertical ? -1.0 : 1.0) * animScale,
-              1.0,
-              1.0,
-            ),
-          child: visualChild,
-        ),
-      );
-    } else if (activeClip is VideoClip) {
+    if (activeClip is VideoClip) {
       videoContent = InteractiveTransformCanvas(
         key: ValueKey('clip_canvas_${activeClip.id}'),
         clip: activeClip,
         isSelected: isSelected,
         viewModel: viewModel,
+        overrideTransform: keyframeTransform,
         child: visualChild,
       );
     } else {
@@ -1581,43 +1577,68 @@ class VideoPreviewSectionState extends State<VideoPreviewSection> {
   }
 
   Widget _buildOverlayLayer(dynamic overlay) {
+    double effScale = (overlay.scale as num).toDouble();
+    Offset effPos = overlay.position is Offset ? overlay.position as Offset : const Offset(0.7, 0.25);
+    double effOpacity = overlay.opacity != null ? (overlay.opacity as num).toDouble() : 1.0;
+    double effRotation = overlay.rotation != null ? (overlay.rotation as num).toDouble() : 0.0;
+
+    if (overlay is OverlayClip && overlay.keyframes.isNotEmpty) {
+      final overlayTime = (viewModel.currentTimeInSeconds - overlay.startTimeInSeconds).clamp(0.0, overlay.durationInSeconds);
+      final kf = viewModel.getInterpolatedOverlayKeyframe(overlay, overlayTime);
+      if (kf != null) {
+        effScale = kf.scale;
+        effOpacity = kf.opacity;
+        effRotation = kf.rotationDegrees * math.pi / 180.0;
+        effPos = Offset(
+          (overlay.position.dx + kf.positionX / 300.0).clamp(0.0, 1.0),
+          (overlay.position.dy + kf.positionY / 300.0).clamp(0.0, 1.0),
+        );
+      }
+    }
+
     Widget overlayContent = Align(
-      alignment: FractionalOffset(overlay.position.dx, overlay.position.dy),
-      child: Transform.scale(
-        scale: overlay.scale,
-        child: Container(
-          width: 140,
-          height: 100,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(AppDimensions.radiusSm),
-            border: Border.all(color: AppColors.secondary, width: 1.5),
-            gradient: LinearGradient(
-              colors: overlay.previewGradient,
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-            boxShadow: [
-              BoxShadow(color: Colors.black.withValues(alpha: 0.5), blurRadius: 8, offset: const Offset(0, 2)),
-            ],
-          ),
-          child: Stack(
-            children: [
-              Center(
-                child: Icon(overlay.previewIcon, color: Colors.white70, size: 28),
-              ),
-              Positioned(
-                top: 4,
-                left: 4,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1.5),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.6),
-                    borderRadius: BorderRadius.circular(3),
-                  ),
-                  child: const Text('PIP', style: TextStyle(fontSize: 8, color: AppColors.secondary, fontWeight: FontWeight.bold)),
+      alignment: FractionalOffset(effPos.dx, effPos.dy),
+      child: Transform.rotate(
+        angle: effRotation,
+        child: Transform.scale(
+          scale: effScale,
+          child: Opacity(
+            opacity: effOpacity.clamp(0.0, 1.0),
+            child: Container(
+              width: 140,
+              height: 100,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(AppDimensions.radiusSm),
+                border: Border.all(color: AppColors.secondary, width: 1.5),
+                gradient: LinearGradient(
+                  colors: overlay.previewGradient,
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
                 ),
+                boxShadow: [
+                  BoxShadow(color: Colors.black.withValues(alpha: 0.5), blurRadius: 8, offset: const Offset(0, 2)),
+                ],
               ),
-            ],
+              child: Stack(
+                children: [
+                  Center(
+                    child: Icon(overlay.previewIcon, color: Colors.white70, size: 28),
+                  ),
+                  Positioned(
+                    top: 4,
+                    left: 4,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1.5),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.6),
+                        borderRadius: BorderRadius.circular(3),
+                      ),
+                      child: const Text('PIP', style: TextStyle(fontSize: 8, color: AppColors.secondary, fontWeight: FontWeight.bold)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
         ),
       ),

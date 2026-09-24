@@ -318,69 +318,129 @@ class ActionToolbar extends StatelessWidget {
                   },
                 ),
 
-                // Keyframe Toggle (◆) — highlights when keyframe exists at playhead
-                Tooltip(
-                  message: 'Add / Remove Keyframe (Ctrl+K)',
-                  waitDuration: const Duration(milliseconds: 350),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 3.0, vertical: 2.0),
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(AppDimensions.radiusSm),
-                      onTap: hasSelectedClip
-                          ? () {
-                              viewModel.toggleKeyframeAtPlayhead();
-                              _showFeedback(
-                                context,
-                                viewModel.hasKeyframeAtPlayhead
-                                    ? '◆ Keyframe removed'
-                                    : '◆ Keyframe added at playhead',
-                              );
-                            }
-                          : null,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: (hasSelectedClip && viewModel.hasKeyframeAtPlayhead)
-                              ? AppColors.primary.withValues(alpha: 0.18)
-                              : Colors.transparent,
-                          borderRadius: BorderRadius.circular(AppDimensions.radiusSm),
-                          border: Border.all(
-                            color: (hasSelectedClip && viewModel.hasKeyframeAtPlayhead)
-                                ? AppColors.primary
-                                : AppColors.divider,
-                            width: (hasSelectedClip && viewModel.hasKeyframeAtPlayhead) ? 1.2 : 0.8,
+                // CapCut-style Keyframe Control Group (⯇  ◆+ / ◆-  ⯈)
+                final canKeyframe = hasSelectedClip || hasSelectedOverlay;
+                final isAtKeyframe = canKeyframe && viewModel.hasKeyframeAtPlayhead;
+                final kfCount = canKeyframe ? viewModel.currentKeyframeCount : 0;
+
+                Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 2.0, vertical: 2.0),
+                  padding: const EdgeInsets.symmetric(horizontal: 4.0, vertical: 2.0),
+                  decoration: BoxDecoration(
+                    color: isAtKeyframe
+                        ? const Color(0xFFFFD600).withValues(alpha: 0.15)
+                        : (kfCount > 0 ? AppColors.surfaceLight : Colors.transparent),
+                    borderRadius: BorderRadius.circular(AppDimensions.radiusSm),
+                    border: Border.all(
+                      color: isAtKeyframe
+                          ? const Color(0xFFFFD600)
+                          : (kfCount > 0 ? AppColors.divider : Colors.transparent),
+                      width: isAtKeyframe ? 1.0 : 0.6,
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Previous Keyframe Arrow (⯇)
+                      if (kfCount > 0)
+                        InkWell(
+                          onTap: (canKeyframe && viewModel.hasPreviousKeyframe)
+                              ? viewModel.jumpToPreviousKeyframe
+                              : null,
+                          borderRadius: BorderRadius.circular(3),
+                          child: Padding(
+                            padding: const EdgeInsets.all(2.0),
+                            child: Icon(
+                              Icons.arrow_left_rounded,
+                              size: 18,
+                              color: (canKeyframe && viewModel.hasPreviousKeyframe)
+                                  ? const Color(0xFFFFD600)
+                                  : AppColors.iconDisabled,
+                            ),
                           ),
                         ),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.diamond_rounded,
-                              size: 16,
-                              color: !hasSelectedClip
-                                  ? AppColors.iconDisabled
-                                  : (viewModel.hasKeyframeAtPlayhead
-                                      ? AppColors.primary
-                                      : AppColors.iconDefault),
-                            ),
-                            const SizedBox(height: 1),
-                            Text(
-                              'Keyframe',
-                              style: TextStyle(
-                                fontSize: 9,
-                                fontWeight: FontWeight.w500,
-                                color: !hasSelectedClip
-                                    ? AppColors.iconDisabled
-                                    : (viewModel.hasKeyframeAtPlayhead
-                                        ? AppColors.primary
-                                        : AppColors.textSecondary),
+
+                      // Central Keyframe Button (◆+ / ◆-)
+                      InkWell(
+                        onTap: canKeyframe
+                            ? () {
+                                final wasAtKeyframe = viewModel.hasKeyframeAtPlayhead;
+                                viewModel.toggleKeyframeAtPlayhead();
+                                _showFeedback(
+                                  context,
+                                  wasAtKeyframe
+                                      ? '◆ Keyframe removed'
+                                      : '◆ Keyframe added at current position',
+                                );
+                              }
+                            : null,
+                        borderRadius: BorderRadius.circular(3),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 4.0, vertical: 2.0),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Stack(
+                                alignment: Alignment.center,
+                                children: [
+                                  Icon(
+                                    Icons.diamond_rounded,
+                                    size: 16,
+                                    color: !canKeyframe
+                                        ? AppColors.iconDisabled
+                                        : (isAtKeyframe
+                                            ? const Color(0xFFFFD600)
+                                            : (kfCount > 0 ? AppColors.primary : AppColors.iconDefault)),
+                                  ),
+                                  Positioned(
+                                    right: -2,
+                                    bottom: -2,
+                                    child: Icon(
+                                      isAtKeyframe ? Icons.remove : Icons.add,
+                                      size: 9,
+                                      color: isAtKeyframe ? Colors.redAccent : Colors.white,
+                                    ),
+                                  ),
+                                ],
                               ),
-                            ),
-                          ],
+                              const SizedBox(height: 1),
+                              Text(
+                                kfCount > 0 ? 'KF ($kfCount)' : 'Keyframe',
+                                style: TextStyle(
+                                  fontSize: 9,
+                                  fontWeight: isAtKeyframe ? FontWeight.bold : FontWeight.w500,
+                                  color: !canKeyframe
+                                      ? AppColors.iconDisabled
+                                      : (isAtKeyframe
+                                          ? const Color(0xFFFFD600)
+                                          : (kfCount > 0 ? AppColors.textPrimary : AppColors.textSecondary)),
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
-                    ),
+
+                      // Next Keyframe Arrow (⯈)
+                      if (kfCount > 0)
+                        InkWell(
+                          onTap: (canKeyframe && viewModel.hasNextKeyframe)
+                              ? viewModel.jumpToNextKeyframe
+                              : null,
+                          borderRadius: BorderRadius.circular(3),
+                          child: Padding(
+                            padding: const EdgeInsets.all(2.0),
+                            child: Icon(
+                              Icons.arrow_right_rounded,
+                              size: 18,
+                              color: (canKeyframe && viewModel.hasNextKeyframe)
+                                  ? const Color(0xFFFFD600)
+                                  : AppColors.iconDisabled,
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
                 ),
 

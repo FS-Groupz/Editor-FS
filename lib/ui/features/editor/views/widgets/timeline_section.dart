@@ -551,6 +551,19 @@ class _TimelineSectionState extends State<TimelineSection> {
               index: idx,
               isSelected: isSelected,
               pixelsPerSecond: viewModel.pixelsPerSecond,
+              clipStartTime: clipStart,
+              currentPlayheadTime: viewModel.currentTimeInSeconds,
+              onKeyframeTap: (kf) {
+                if (viewModel.isPlaying) viewModel.pause();
+                final targetTime = (clipStart + kf.timeInSeconds).clamp(0.0, viewModel.totalDurationInSeconds);
+                viewModel.seekTo(targetTime);
+                if (_horizontalScrollController.hasClients) {
+                  _horizontalScrollController.jumpTo(
+                    (targetTime * viewModel.pixelsPerSecond)
+                        .clamp(0.0, _horizontalScrollController.position.maxScrollExtent),
+                  );
+                }
+              },
               onTap: () => viewModel.selectClip(idx),
               onTapDown: (details) {
                 if (viewModel.isPlaying) viewModel.pause();
