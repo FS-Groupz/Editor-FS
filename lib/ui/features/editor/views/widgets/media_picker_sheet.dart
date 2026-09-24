@@ -10,11 +10,13 @@ import 'package:capcut_video_editor/ui/features/editor/view_models/editor_view_m
 class MediaPickerSheet extends StatefulWidget {
   final EditorViewModel viewModel;
   final bool isReplacing;
+  final bool asOverlay;
 
   const MediaPickerSheet({
     super.key,
     required this.viewModel,
     this.isReplacing = false,
+    this.asOverlay = false,
   });
 
   @override
@@ -49,7 +51,9 @@ class _MediaPickerSheetState extends State<MediaPickerSheet> with SingleTickerPr
 
     final importedAsset = widget.viewModel.getAssetById(_selectedId!);
     if (importedAsset != null) {
-      if (widget.isReplacing) {
+      if (widget.asOverlay) {
+        widget.viewModel.addOverlayFromMediaAsset(importedAsset);
+      } else if (widget.isReplacing) {
         widget.viewModel.replaceSelectedClip(
           assetId: importedAsset.id,
           title: importedAsset.name,
@@ -132,7 +136,9 @@ class _MediaPickerSheetState extends State<MediaPickerSheet> with SingleTickerPr
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text(
-                      widget.isReplacing ? 'Replace Media Clip' : 'Select Media to Add',
+                      widget.asOverlay
+                          ? 'Select Media for PIP Overlay'
+                          : (widget.isReplacing ? 'Replace Media Clip' : 'Select Media to Add'),
                       style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
                     ),
                     IconButton(
@@ -240,7 +246,9 @@ class _MediaPickerSheetState extends State<MediaPickerSheet> with SingleTickerPr
                         elevation: _selectedId != null ? 3 : 0,
                       ),
                       child: Text(
-                        widget.isReplacing ? 'Replace Selected Clip' : 'Add to Timeline',
+                        widget.asOverlay
+                            ? 'Add as PIP Layer'
+                            : (widget.isReplacing ? 'Replace Selected Clip' : 'Add to Timeline'),
                         style: TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.bold,

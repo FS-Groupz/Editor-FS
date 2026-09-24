@@ -9,6 +9,7 @@ import 'package:capcut_video_editor/ui/features/editor/views/widgets/media_picke
 import 'package:capcut_video_editor/ui/features/editor/views/widgets/speed_adjustment_sheet.dart';
 import 'package:capcut_video_editor/ui/features/editor/views/widgets/beat_options_sheet.dart';
 import 'package:capcut_video_editor/ui/features/editor/views/widgets/auto_captions_sheet.dart';
+import 'package:capcut_video_editor/ui/features/editor/views/widgets/pip_overlay_sheet.dart';
 
 /// Middle Action Toolbar containing Split, Trim Left/Right, Delete, Duplicate (with PIP option),
 /// Speed, Volume, Add Clip (Media Picker), and Export.
@@ -218,9 +219,14 @@ class ActionToolbar extends StatelessWidget {
                   icon: Icons.copy_all_rounded,
                   label: 'Duplicate',
                   tooltip: 'Duplicate selected (Ctrl+D)',
-                  enabled: hasSelectedClip || hasSelectedAudio || hasSelectedText,
+                  enabled: hasSelectedClip || hasSelectedAudio || hasSelectedText || hasSelectedOverlay,
                   onTap: () {
-                    if (hasSelectedText) {
+                    if (hasSelectedOverlay) {
+                      final dup = viewModel.duplicateSelectedOverlay();
+                      if (dup != null) {
+                        _showFeedback(context, '📋 Duplicated PIP layer "${dup.title}"');
+                      }
+                    } else if (hasSelectedText) {
                       final dup = viewModel.duplicateSelectedText();
                       if (dup != null) {
                         _showFeedback(context, '📋 Duplicated text layer "${dup.text}"');
@@ -256,6 +262,76 @@ class ActionToolbar extends StatelessWidget {
                     );
                   },
                 ),
+
+                // PIP Overlay (Import Media as Overlay or Open PIP Settings)
+                _buildActionButton(
+                  context: context,
+                  icon: Icons.picture_in_picture_alt_rounded,
+                  label: hasSelectedOverlay ? 'PIP Studio' : 'PIP Overlay',
+                  tooltip: 'Picture-in-Picture layer compositing',
+                  isAccent: hasSelectedOverlay,
+                  enabled: true,
+                  onTap: () {
+                    if (hasSelectedOverlay) {
+                      PipOverlaySheet.show(context, viewModel, initialTab: 0);
+                    } else if (hasSelectedClip) {
+                      viewModel.duplicateSelectedClipAsOverlay();
+                      _showFeedback(context, '✨ Duplicated clip as Picture-in-Picture (PIP) layer');
+                    } else {
+                      showModalBottomSheet(
+                        context: context,
+                        isScrollControlled: true,
+                        backgroundColor: Colors.transparent,
+                        builder: (ctx) => MediaPickerSheet(
+                          viewModel: viewModel,
+                          asOverlay: true,
+                        ),
+                      );
+                    }
+                  },
+                ),
+
+                // Chroma Key Action (Appears when Overlay is Selected)
+                if (hasSelectedOverlay)
+                  _buildActionButton(
+                    context: context,
+                    icon: Icons.auto_fix_high_rounded,
+                    label: (viewModel.selectedOverlay?.enableChromaKey ?? false)
+                        ? 'Chroma ON'
+                        : 'Chroma Key',
+                    isAccent: viewModel.selectedOverlay?.enableChromaKey ?? false,
+                    enabled: true,
+                    onTap: () {
+                      PipOverlaySheet.show(context, viewModel, initialTab: 0);
+                    },
+                  ),
+
+                // PIP Blending Action (Appears when Overlay is Selected)
+                if (hasSelectedOverlay)
+                  _buildActionButton(
+                    context: context,
+                    icon: Icons.layers_rounded,
+                    label: viewModel.selectedOverlay?.blendMode != BlendMode.srcOver
+                        ? 'Blend (${viewModel.selectedOverlay!.blendMode.name})'
+                        : 'PIP Blend',
+                    isAccent: viewModel.selectedOverlay?.blendMode != BlendMode.srcOver,
+                    enabled: true,
+                    onTap: () {
+                      PipOverlaySheet.show(context, viewModel, initialTab: 1);
+                    },
+                  ),
+
+                // Overlay Opacity Action (Appears when Overlay is Selected)
+                if (hasSelectedOverlay)
+                  _buildActionButton(
+                    context: context,
+                    icon: Icons.opacity_rounded,
+                    label: 'Opacity (${((viewModel.selectedOverlay?.opacity ?? 1.0) * 100).round()}%)',
+                    enabled: true,
+                    onTap: () {
+                      PipOverlaySheet.show(context, viewModel, initialTab: 2);
+                    },
+                  ),
 
                 // Cut Action
                 _buildActionButton(

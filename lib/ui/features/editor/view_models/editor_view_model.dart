@@ -1311,10 +1311,14 @@ class EditorViewModel extends ChangeNotifier {
 
     final original = _videoClips[_selectedClipIndex!];
     final clipStart = getClipStartTime(_selectedClipIndex!);
+    final asset = mediaLibrary[original.assetId];
 
     final overlay = OverlayClip(
       id: 'overlay_${DateTime.now().millisecondsSinceEpoch}',
       title: '${original.title} (PIP Layer)',
+      assetId: original.assetId,
+      localPath: asset?.localPath ?? asset?.thumbnailPath,
+      isPhoto: asset?.type == MediaAssetType.photo,
       startTime: Duration(milliseconds: (clipStart * 1000).round()),
       duration: original.activeDuration,
       previewGradient: original.previewGradient,
@@ -1322,6 +1326,8 @@ class EditorViewModel extends ChangeNotifier {
       position: const Offset(0.7, 0.25),
       scale: 0.45,
       opacity: original.opacity,
+      blendMode: original.blendMode,
+      mask: original.mask,
     );
 
     _overlayClips.add(overlay);
@@ -1589,6 +1595,93 @@ class EditorViewModel extends ChangeNotifier {
   void updateOverlayScale(int index, double scale) {
     if (index < 0 || index >= _overlayClips.length) return;
     _overlayClips[index] = _overlayClips[index].copyWith(scale: scale);
+    notifyListeners();
+  }
+
+  void updateSelectedOverlayBlendMode(BlendMode blendMode) {
+    if (_selectedOverlayIndex == null ||
+        _selectedOverlayIndex! < 0 ||
+        _selectedOverlayIndex! >= _overlayClips.length) return;
+    _saveSnapshot();
+    _overlayClips[_selectedOverlayIndex!] = _overlayClips[_selectedOverlayIndex!].copyWith(
+      blendMode: blendMode,
+    );
+    scheduleAutoSave();
+    notifyListeners();
+  }
+
+  void updateSelectedOverlayOpacity(double opacity) {
+    if (_selectedOverlayIndex == null ||
+        _selectedOverlayIndex! < 0 ||
+        _selectedOverlayIndex! >= _overlayClips.length) return;
+    _saveSnapshot();
+    _overlayClips[_selectedOverlayIndex!] = _overlayClips[_selectedOverlayIndex!].copyWith(
+      opacity: opacity.clamp(0.0, 1.0),
+    );
+    scheduleAutoSave();
+    notifyListeners();
+  }
+
+  void updateSelectedOverlayChromaKey({
+    bool? enable,
+    Color? color,
+    double? similarity,
+    double? smoothness,
+    double? spill,
+  }) {
+    if (_selectedOverlayIndex == null ||
+        _selectedOverlayIndex! < 0 ||
+        _selectedOverlayIndex! >= _overlayClips.length) return;
+    _saveSnapshot();
+    _overlayClips[_selectedOverlayIndex!] = _overlayClips[_selectedOverlayIndex!].copyWith(
+      enableChromaKey: enable,
+      chromaKeyColor: color,
+      chromaSimilarity: similarity,
+      chromaSmoothness: smoothness,
+      chromaSpill: spill,
+    );
+    scheduleAutoSave();
+    notifyListeners();
+  }
+
+  void updateSelectedOverlayMask(VideoMask? mask) {
+    if (_selectedOverlayIndex == null ||
+        _selectedOverlayIndex! < 0 ||
+        _selectedOverlayIndex! >= _overlayClips.length) return;
+    _saveSnapshot();
+    _overlayClips[_selectedOverlayIndex!] = _overlayClips[_selectedOverlayIndex!].copyWith(
+      mask: mask,
+      clearMask: mask == null,
+    );
+    scheduleAutoSave();
+    notifyListeners();
+  }
+
+  void addOverlayFromMediaAsset(MediaAsset asset) {
+    _saveSnapshot();
+    final playheadMs = (_playheadPosition * 1000).round();
+    final dur = asset.duration ?? const Duration(seconds: 4);
+
+    final overlay = OverlayClip(
+      id: 'overlay_${DateTime.now().millisecondsSinceEpoch}',
+      title: asset.name.isNotEmpty ? asset.name : 'PIP Layer',
+      assetId: asset.id,
+      localPath: asset.localPath ?? asset.thumbnailPath,
+      isPhoto: asset.type == MediaAssetType.photo,
+      startTime: Duration(milliseconds: playheadMs),
+      duration: dur,
+      previewGradient: const [Color(0xFF00C6FF), Color(0xFF0072FF)],
+      previewIcon: asset.type == MediaAssetType.photo ? Icons.image_rounded : Icons.movie_filter_rounded,
+      position: const Offset(0.7, 0.25),
+      scale: 0.45,
+      opacity: 1.0,
+      blendMode: BlendMode.srcOver,
+    );
+
+    _overlayClips.add(overlay);
+    _selectedOverlayIndex = _overlayClips.length - 1;
+    _selectedClipIndex = null;
+    scheduleAutoSave();
     notifyListeners();
   }
 

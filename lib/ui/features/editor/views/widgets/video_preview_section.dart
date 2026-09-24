@@ -22,6 +22,7 @@ import 'package:capcut_video_editor/core/services/video_playback_service.dart';
 import 'package:capcut_video_editor/domain/models/clip_spatial_transform.dart';
 import 'package:capcut_video_editor/ui/features/editor/view_models/editor_view_model.dart';
 import 'package:capcut_video_editor/ui/features/editor/views/widgets/interactive_transform_canvas.dart';
+import 'package:capcut_video_editor/core/utils/chroma_key_helper.dart';
 
 /// Top Video Preview Screen containing the live video canvas, aspect-ratio viewport,
 /// color grading LUT filters, adjustments, Picture-in-Picture (PIP) layers,
@@ -1596,6 +1597,77 @@ class VideoPreviewSectionState extends State<VideoPreviewSection> {
       }
     }
 
+    Widget visualBody;
+    if (overlay is OverlayClip && overlay.localPath != null && File(overlay.localPath!).existsSync()) {
+      visualBody = Image.file(
+        File(overlay.localPath!),
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) => _buildPlaceholderOverlayGradient(overlay),
+      );
+    } else {
+      visualBody = _buildPlaceholderOverlayGradient(overlay);
+    }
+
+    Widget overlayCard = Container(
+      width: 140,
+      height: 100,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(AppDimensions.radiusSm),
+        border: Border.all(color: AppColors.secondary, width: 1.5),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withValues(alpha: 0.5), blurRadius: 8, offset: const Offset(0, 2)),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(AppDimensions.radiusSm - 1.5),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            visualBody,
+            Positioned(
+              top: 4,
+              left: 4,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1.5),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.65),
+                  borderRadius: BorderRadius.circular(3),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text('PIP', style: TextStyle(fontSize: 8, color: AppColors.secondary, fontWeight: FontWeight.bold)),
+                    if (overlay is OverlayClip && overlay.enableChromaKey) ...[
+                      const SizedBox(width: 3),
+                      const Icon(Icons.auto_fix_high_rounded, size: 8, color: Color(0xFF00FF00)),
+                    ],
+                    if (overlay is OverlayClip && overlay.blendMode != BlendMode.srcOver) ...[
+                      const SizedBox(width: 3),
+                      const Icon(Icons.layers_rounded, size: 8, color: Colors.cyanAccent),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    // Apply Chroma Key (Green / Blue Screen Removal)
+    if (overlay is OverlayClip && overlay.enableChromaKey) {
+      overlayCard = ColorFiltered(
+        colorFilter: ChromaKeyHelper.createColorFilter(
+          keyColor: overlay.chromaKeyColor,
+          similarity: overlay.chromaSimilarity,
+          smoothness: overlay.chromaSmoothness,
+          spill: overlay.chromaSpill,
+        ),
+        child: overlayCard,
+      );
+    }
+
+    // Apply Spatial Positioning, Scaling & Opacity
     Widget overlayContent = Align(
       alignment: FractionalOffset(effPos.dx, effPos.dy),
       child: Transform.rotate(
@@ -1604,41 +1676,7 @@ class VideoPreviewSectionState extends State<VideoPreviewSection> {
           scale: effScale,
           child: Opacity(
             opacity: effOpacity.clamp(0.0, 1.0),
-            child: Container(
-              width: 140,
-              height: 100,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(AppDimensions.radiusSm),
-                border: Border.all(color: AppColors.secondary, width: 1.5),
-                gradient: LinearGradient(
-                  colors: overlay.previewGradient,
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                boxShadow: [
-                  BoxShadow(color: Colors.black.withValues(alpha: 0.5), blurRadius: 8, offset: const Offset(0, 2)),
-                ],
-              ),
-              child: Stack(
-                children: [
-                  Center(
-                    child: Icon(overlay.previewIcon, color: Colors.white70, size: 28),
-                  ),
-                  Positioned(
-                    top: 4,
-                    left: 4,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1.5),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.6),
-                        borderRadius: BorderRadius.circular(3),
-                      ),
-                      child: const Text('PIP', style: TextStyle(fontSize: 8, color: AppColors.secondary, fontWeight: FontWeight.bold)),
-                    ),
-                  ),
-                ],
-              ),
-            ),
+            child: overlayCard,
           ),
         ),
       ),
@@ -1660,6 +1698,27 @@ class VideoPreviewSectionState extends State<VideoPreviewSection> {
     }
 
     return overlayContent;
+  }
+
+  Widget _buildPlaceholderOverlayGradient(dynamic overlay) {
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: overlay.previewGradient is List<Color>
+              ? overlay.previewGradient as List<Color>
+              : const [Color(0xFF8A2387), Color(0xFFE94057)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+      ),
+      child: Center(
+        child: Icon(
+          overlay.previewIcon is IconData ? overlay.previewIcon as IconData : Icons.layers_rounded,
+          color: Colors.white70,
+          size: 28,
+        ),
+      ),
+    );
   }
 
   Widget _buildStickerOverlay(dynamic sticker) {
