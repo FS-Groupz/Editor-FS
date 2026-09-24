@@ -194,10 +194,11 @@ class _TimelineSectionState extends State<TimelineSection> {
                       halfScreenWidth) /
                   viewModel.pixelsPerSecond;
               final clampedTime = targetTime.clamp(0.0, viewModel.totalDurationInSeconds);
-              viewModel.seekTo(clampedTime);
+              final snappedTime = viewModel.snapToNearestBeat(clampedTime);
+              viewModel.seekTo(snappedTime);
               if (_horizontalScrollController.hasClients) {
                 _horizontalScrollController.jumpTo(
-                  (clampedTime * viewModel.pixelsPerSecond)
+                  (snappedTime * viewModel.pixelsPerSecond)
                       .clamp(0.0, _horizontalScrollController.position.maxScrollExtent),
                 );
               }
@@ -210,10 +211,11 @@ class _TimelineSectionState extends State<TimelineSection> {
               final deltaSec = (details.primaryDelta ?? 0.0) / viewModel.pixelsPerSecond;
               final newPlayhead = (viewModel.playheadPosition + deltaSec)
                   .clamp(0.0, viewModel.totalDurationInSeconds);
-              viewModel.seekTo(newPlayhead);
+              final snappedPlayhead = viewModel.snapToNearestBeat(newPlayhead);
+              viewModel.seekTo(snappedPlayhead);
               if (_horizontalScrollController.hasClients) {
                 _horizontalScrollController.jumpTo(
-                  (newPlayhead * viewModel.pixelsPerSecond)
+                  (snappedPlayhead * viewModel.pixelsPerSecond)
                       .clamp(0.0, _horizontalScrollController.position.maxScrollExtent),
                 );
               }
@@ -260,9 +262,10 @@ class _TimelineSectionState extends State<TimelineSection> {
                           viewModel.pause();
                         }
                       } else if (notification is ScrollUpdateNotification && _isUserScrollingHorizontal) {
-                        final newPlayhead = (_horizontalScrollController.offset / viewModel.pixelsPerSecond)
+                        final rawPlayhead = (_horizontalScrollController.offset / viewModel.pixelsPerSecond)
                             .clamp(0.0, viewModel.totalDurationInSeconds);
-                        viewModel.seekTo(newPlayhead);
+                        final snappedPlayhead = viewModel.snapToNearestBeat(rawPlayhead);
+                        viewModel.seekTo(snappedPlayhead);
                       } else if (notification is ScrollEndNotification) {
                         _isUserScrollingHorizontal = false;
                       }
@@ -279,12 +282,13 @@ class _TimelineSectionState extends State<TimelineSection> {
                         behavior: HitTestBehavior.translucent,
                         onTapDown: (details) {
                           if (viewModel.isPlaying) viewModel.pause();
-                          final tapSec = (details.localPosition.dx / viewModel.pixelsPerSecond)
+                          final rawTapSec = (details.localPosition.dx / viewModel.pixelsPerSecond)
                               .clamp(0.0, viewModel.totalDurationInSeconds);
-                          viewModel.seekTo(tapSec);
+                          final snappedSec = viewModel.snapToNearestBeat(rawTapSec);
+                          viewModel.seekTo(snappedSec);
                           if (_horizontalScrollController.hasClients) {
                             _horizontalScrollController.jumpTo(
-                              (tapSec * viewModel.pixelsPerSecond)
+                              (snappedSec * viewModel.pixelsPerSecond)
                                   .clamp(0.0, _horizontalScrollController.position.maxScrollExtent),
                             );
                           }
@@ -391,6 +395,51 @@ class _TimelineSectionState extends State<TimelineSection> {
                 ),
               ),
               const Icon(Icons.zoom_in_rounded, size: 16, color: AppColors.textMuted),
+              if (viewModel.audioTracks.any((t) => t.beats.isNotEmpty)) ...[
+                const SizedBox(width: 8),
+                InkWell(
+                  onTap: () => viewModel.toggleSnapToBeat(),
+                  borderRadius: BorderRadius.circular(4),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: viewModel.isSnapToBeatEnabled
+                          ? const Color(0xFFFFD600).withValues(alpha: 0.18)
+                          : AppColors.surfaceLight,
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(
+                        color: viewModel.isSnapToBeatEnabled
+                            ? const Color(0xFFFFD600)
+                            : AppColors.divider,
+                        width: 0.6,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.graphic_eq_rounded,
+                          size: 11,
+                          color: viewModel.isSnapToBeatEnabled
+                              ? const Color(0xFFFFD600)
+                              : AppColors.textMuted,
+                        ),
+                        const SizedBox(width: 3),
+                        Text(
+                          'SNAP',
+                          style: TextStyle(
+                            fontSize: 9,
+                            fontWeight: FontWeight.bold,
+                            color: viewModel.isSnapToBeatEnabled
+                                ? const Color(0xFFFFD600)
+                                : AppColors.textMuted,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
 

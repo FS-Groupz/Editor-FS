@@ -6,6 +6,7 @@ import 'package:capcut_video_editor/core/constants/app_colors.dart';
 import 'package:capcut_video_editor/core/constants/app_dimensions.dart';
 import 'package:capcut_video_editor/core/services/asset_library_service.dart';
 import 'package:capcut_video_editor/core/services/audio_waveform_service.dart';
+import 'package:capcut_video_editor/core/services/audio_beat_service.dart';
 import 'package:capcut_video_editor/domain/models/asset.dart';
 import 'package:capcut_video_editor/domain/models/audio_track.dart';
 import 'package:capcut_video_editor/domain/models/media_asset.dart';
@@ -48,9 +49,16 @@ class _AudioDrawerState extends State<AudioDrawer> with SingleTickerProviderStat
     required String assetId,
     String artist = 'Original Audio',
   }) {
+    final trackDuration = Duration(seconds: durationSec);
     final waveform = AudioWaveformService.instance.getWaveformSync(
       cacheKey: '${assetId}_$durationSec',
-      duration: Duration(seconds: durationSec),
+      duration: trackDuration,
+    );
+
+    final autoBeats = AudioBeatService.instance.detectBeats(
+      waveformPoints: waveform,
+      duration: trackDuration,
+      sensitivity: BeatSensitivity.strongDownbeats,
     );
 
     final track = AudioTrack(
@@ -58,16 +66,18 @@ class _AudioDrawerState extends State<AudioDrawer> with SingleTickerProviderStat
       assetId: assetId,
       title: title,
       artist: artist,
-      duration: Duration(seconds: durationSec),
+      duration: trackDuration,
       startTime: Duration(milliseconds: (widget.viewModel.playheadPosition * 1000).round()),
       waveformPoints: waveform,
+      beats: autoBeats,
+      showBeats: true,
       volume: 0.85,
       speed: 1.0,
     );
 
     widget.viewModel.addAudioTrack(track);
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Added track "$title" to timeline!'), duration: const Duration(seconds: 2)),
+      SnackBar(content: Text('Added track "$title" (${autoBeats.length} beats detected) to timeline!'), duration: const Duration(seconds: 2)),
     );
   }
 

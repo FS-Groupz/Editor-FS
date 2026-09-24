@@ -7,6 +7,7 @@ import 'package:capcut_video_editor/ui/features/editor/views/widgets/duplicate_o
 import 'package:capcut_video_editor/ui/features/editor/views/widgets/export_modal_sheet.dart';
 import 'package:capcut_video_editor/ui/features/editor/views/widgets/media_picker_sheet.dart';
 import 'package:capcut_video_editor/ui/features/editor/views/widgets/speed_adjustment_sheet.dart';
+import 'package:capcut_video_editor/ui/features/editor/views/widgets/beat_options_sheet.dart';
 
 /// Middle Action Toolbar containing Split, Trim Left/Right, Delete, Duplicate (with PIP option),
 /// Speed, Volume, Add Clip (Media Picker), and Export.
@@ -415,6 +416,19 @@ class ActionToolbar extends StatelessWidget {
                   enabled: hasSelectedClip || hasSelectedAudio,
                   onTap: () => _showVolumeDialog(context),
                 ),
+
+                // Match Cut / Beats Action (Audio Track Selected)
+                if (hasSelectedAudio)
+                  _buildActionButton(
+                    context: context,
+                    icon: Icons.graphic_eq_rounded,
+                    label: (viewModel.selectedAudioTrack?.beats.isNotEmpty ?? false)
+                        ? 'Beats (${viewModel.selectedAudioTrack!.beats.length})'
+                        : 'Beats',
+                    isAccent: (viewModel.selectedAudioTrack?.beats.isNotEmpty ?? false),
+                    enabled: true,
+                    onTap: () => BeatOptionsSheet.show(context, viewModel),
+                  ),
 
                 // Delete Action (Context-Aware Normal Delete)
                 _buildActionButton(

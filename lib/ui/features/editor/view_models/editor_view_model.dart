@@ -34,6 +34,8 @@ import 'package:capcut_video_editor/data/repositories/mock_media_repository.dart
 import 'package:capcut_video_editor/domain/enums/transition_type.dart';
 import 'package:capcut_video_editor/domain/models/transition.dart';
 import 'package:capcut_video_editor/domain/services/transition_validator.dart';
+import 'package:flutter/services.dart';
+import 'package:capcut_video_editor/core/services/audio_beat_service.dart';
 
 /// Result returned from every transition mutation.
 class TransitionMutationResult {
@@ -254,6 +256,14 @@ class EditorViewModel extends ChangeNotifier {
   String? _selectedStickerId;
   String? _selectedAudioTrackId;
   bool _isAudioSelected = false;
+
+  bool _isSnapToBeatEnabled = true;
+  bool get isSnapToBeatEnabled => _isSnapToBeatEnabled;
+
+  void toggleSnapToBeat([bool? enabled]) {
+    _isSnapToBeatEnabled = enabled ?? !_isSnapToBeatEnabled;
+    notifyListeners();
+  }
 
   double _playheadPosition = 0.0; // In seconds
   bool _isPlaying = false;
@@ -2402,6 +2412,129 @@ class EditorViewModel extends ChangeNotifier {
 
   void updateAudioSpeed(String id, double speed) {
     setAudioTrackSpeed(speed, id: id);
+  }
+
+  // --- Audio Beat & Match Cut Operations ---
+
+  Future<void> generateBeatsForTrack(
+    String trackId, {
+    BeatSensitivity sensitivity = BeatSensitivity.strongDownbeats,
+  }) async {
+    final index = _audioTracks.indexWhere((t) => t.id == trackId);
+    if (index == -1) return;
+
+    _saveSnapshot();
+    final track = _audioTracks[index];
+
+    List<double> waveform = track.waveformPoints;
+    if (waveform.isEmpty) {
+      waveform = AudioWaveformService.instance.getWaveformSync(
+        cacheKey: '${track.assetId}_${track.duration.inMilliseconds}',
+        duration: track.duration,
+      );
+    }
+
+    final detected = AudioBeatService.instance.detectBeats(
+      waveformPoints: waveform,
+      duration: track.duration,
+      sensitivity: sensitivity,
+    );
+
+    _audioTracks[index] = track.copyWith(
+      waveformPoints: waveform,
+      beats: detected,
+      showBeats: true,
+    );
+
+    scheduleAutoSave();
+    TtsService.announce('Detected ${detected.length} beats');
+    notifyListeners();
+  }
+
+  void toggleBeatAtPlayhead(String trackId) {
+    final index = _audioTracks.indexWhere((t) => t.id == trackId);
+    if (index == -1) return;
+
+    final track = _audioTracks[index];
+    // Calculate timestamp relative to source audio file
+    final relativeTrackSec = (playheadPosition - track.startTimeInSeconds);
+    if (relativeTrackSec < 0.0) return;
+
+    final sourceSec = track.trimStartInSeconds + (relativeTrackSec * track.speed);
+    if (sourceSec > track.originalDurationInSeconds) return;
+
+    _saveSnapshot();
+    final roundedSource = (sourceSec * 1000).round() / 1000.0;
+    final currentBeats = List<double>.from(track.beats);
+
+    // If an existing beat is within 0.12s of playhead, remove it
+    final existingIndex = currentBeats.indexWhere((b) => (b - roundedSource).abs() <= 0.12);
+    if (existingIndex != -1) {
+      currentBeats.removeAt(existingIndex);
+      TtsService.announce('Removed beat marker');
+    } else {
+      currentBeats.add(roundedSource);
+      currentBeats.sort();
+      TtsService.announce('Added beat marker');
+    }
+
+    _audioTracks[index] = track.copyWith(
+      beats: currentBeats,
+      showBeats: true,
+    );
+    scheduleAutoSave();
+    notifyListeners();
+  }
+
+  void clearBeatsForTrack(String trackId) {
+    final index = _audioTracks.indexWhere((t) => t.id == trackId);
+    if (index == -1) return;
+
+    _saveSnapshot();
+    _audioTracks[index] = _audioTracks[index].copyWith(beats: const []);
+    scheduleAutoSave();
+    notifyListeners();
+  }
+
+  void toggleBeatsVisibility(String trackId) {
+    final index = _audioTracks.indexWhere((t) => t.id == trackId);
+    if (index == -1) return;
+
+    _audioTracks[index] = _audioTracks[index].copyWith(
+      showBeats: !_audioTracks[index].showBeats,
+    );
+    notifyListeners();
+  }
+
+  /// Magnetically snaps [targetTimelineSec] to the nearest visible beat across active audio tracks.
+  /// If snap is performed, triggers haptic feedback and returns the exact beat timestamp.
+  double snapToNearestBeat(double targetTimelineSec, {double threshold = 0.08}) {
+    if (!_isSnapToBeatEnabled || _audioTracks.isEmpty) return targetTimelineSec;
+
+    final allVisibleBeats = <double>[];
+    for (final track in _audioTracks) {
+      if (track.showBeats && track.beats.isNotEmpty) {
+        allVisibleBeats.addAll(track.visibleTimelineBeats);
+      }
+    }
+
+    if (allVisibleBeats.isEmpty) return targetTimelineSec;
+
+    final nearest = AudioBeatService.instance.findNearestBeat(
+      targetTimelineSec,
+      allVisibleBeats,
+      threshold: threshold,
+    );
+
+    if (nearest != null) {
+      // Tactile feedback on snap
+      if ((nearest - targetTimelineSec).abs() > 0.001) {
+        HapticFeedback.selectionClick();
+      }
+      return nearest;
+    }
+
+    return targetTimelineSec;
   }
 
   // --- Text Overlay Operations ---

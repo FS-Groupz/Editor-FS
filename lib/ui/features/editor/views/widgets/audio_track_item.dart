@@ -93,6 +93,9 @@ class AudioTrackItem extends StatelessWidget {
                       trimEnd: audioTrack.effectiveTrimEnd,
                       totalDuration: audioTrack.duration,
                       volume: audioTrack.volume,
+                      speed: audioTrack.speed,
+                      beats: audioTrack.beats,
+                      showBeats: audioTrack.showBeats,
                       isMuted: audioTrack.isMuted,
                       playheadProgress: playheadProgress,
                       activeColor: AppColors.audioTrackWaveform,
@@ -230,6 +233,9 @@ class _WaveformPainter extends CustomPainter {
   final Duration trimEnd;
   final Duration totalDuration;
   final double volume;
+  final double speed;
+  final List<double> beats;
+  final bool showBeats;
   final bool isMuted;
   final double playheadProgress;
   final Color activeColor;
@@ -242,6 +248,9 @@ class _WaveformPainter extends CustomPainter {
     Duration? trimEnd,
     Duration? totalDuration,
     this.volume = 1.0,
+    this.speed = 1.0,
+    this.beats = const [],
+    this.showBeats = true,
     this.isMuted = false,
     this.playheadProgress = 0.0,
     Color? color,
@@ -322,6 +331,60 @@ class _WaveformPainter extends CustomPainter {
         paint,
       );
     }
+
+    // 6. Draw Golden Beat Markers (CapCut Match Cut Style)
+    if (showBeats && beats.isNotEmpty) {
+      final startSec = trimStart.inMilliseconds / 1000.0;
+      final endSec = trimEnd.inMilliseconds / 1000.0;
+      final speedFactor = speed > 0 ? speed : 1.0;
+      final effectiveDurationSec = (endSec - startSec) / speedFactor;
+
+      if (effectiveDurationSec > 0.0) {
+        final beatDotPaint = Paint()
+          ..color = const Color(0xFFFFD600) // Vibrant Gold/Yellow
+          ..style = PaintingStyle.fill;
+
+        final beatBorderPaint = Paint()
+          ..color = Colors.black87
+          ..strokeWidth = 1.0
+          ..style = PaintingStyle.stroke;
+
+        final beatGuidelinePaint = Paint()
+          ..color = const Color(0xFFFFD600).withValues(alpha: 0.35)
+          ..strokeWidth = 1.0
+          ..strokeCap = StrokeCap.round;
+
+        final pulsePaint = Paint()
+          ..color = const Color(0xFFFFEA00).withValues(alpha: 0.6)
+          ..strokeWidth = 2.0
+          ..style = PaintingStyle.stroke;
+
+        for (final b in beats) {
+          if (b >= startSec && b <= endSec) {
+            final relativeSec = (b - startSec) / speedFactor;
+            final fraction = (relativeSec / effectiveDurationSec).clamp(0.0, 1.0);
+            final beatX = fraction * size.width;
+
+            // Vertical guideline across track height
+            canvas.drawLine(
+              Offset(beatX, 2),
+              Offset(beatX, size.height - 2),
+              beatGuidelinePaint,
+            );
+
+            // Active pulse ring if playhead is currently close to this beat
+            final isNearPlayhead = (beatX - playheadX).abs() <= 6.0;
+            if (isNearPlayhead) {
+              canvas.drawCircle(Offset(beatX, centerY), 6.0, pulsePaint);
+            }
+
+            // Central Beat Dot
+            canvas.drawCircle(Offset(beatX, centerY), 3.2, beatDotPaint);
+            canvas.drawCircle(Offset(beatX, centerY), 3.2, beatBorderPaint);
+          }
+        }
+      }
+    }
   }
 
   @override
@@ -331,6 +394,9 @@ class _WaveformPainter extends CustomPainter {
         oldDelegate.trimEnd != trimEnd ||
         oldDelegate.totalDuration != totalDuration ||
         oldDelegate.volume != volume ||
+        oldDelegate.speed != speed ||
+        oldDelegate.beats != beats ||
+        oldDelegate.showBeats != showBeats ||
         oldDelegate.isMuted != isMuted ||
         (oldDelegate.playheadProgress - playheadProgress).abs() > 0.005 ||
         oldDelegate.activeColor != activeColor ||
