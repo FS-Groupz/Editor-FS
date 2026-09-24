@@ -84,7 +84,7 @@ class _BlendModeAdjustmentSheetState extends State<BlendModeAdjustmentSheet> {
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                       margin: const EdgeInsets.symmetric(vertical: 2),
                       decoration: BoxDecoration(
-                        color: isSelected ? AppColors.primary.withValues(alpha: 0.15) : Colors.transparent,
+                        color: isSelected ? AppColors.primary.withOpacity(0.15) : Colors.transparent,
                         borderRadius: BorderRadius.circular(8),
                         border: Border.all(
                           color: isSelected ? AppColors.primary : Colors.transparent,

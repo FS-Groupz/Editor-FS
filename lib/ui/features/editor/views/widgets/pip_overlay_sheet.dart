@@ -329,7 +329,7 @@ class _PipOverlaySheetState extends State<PipOverlaySheet>
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: AppColors.surface.withValues(alpha: 0.5),
+              color: AppColors.surface.withOpacity(0.5),
               borderRadius: BorderRadius.circular(AppDimensions.radiusMd),
             ),
             child: const Column(
@@ -372,7 +372,7 @@ class _PipOverlaySheetState extends State<PipOverlaySheet>
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             margin: const EdgeInsets.symmetric(vertical: 2.5),
             decoration: BoxDecoration(
-              color: isSelected ? AppColors.secondary.withValues(alpha: 0.15) : AppColors.surface,
+              color: isSelected ? AppColors.secondary.withOpacity(0.15) : AppColors.surface,
               borderRadius: BorderRadius.circular(AppDimensions.radiusSm),
               border: Border.all(
                 color: isSelected ? AppColors.secondary : Colors.transparent,
@@ -499,7 +499,7 @@ class _PipOverlaySheetState extends State<PipOverlaySheet>
     ];
 
     final currentType = overlay.mask?.type ?? MaskType.none;
-    final isInverted = overlay.mask?.isInverted ?? false;
+    final isInverted = overlay.mask?.inverted ?? false;
 
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: AppDimensions.lg, vertical: 8),
@@ -527,10 +527,9 @@ class _PipOverlaySheetState extends State<PipOverlaySheet>
                     widget.viewModel.updateSelectedOverlayMask(
                       VideoMask(
                         type: type,
-                        width: 0.5,
-                        height: 0.5,
-                        feather: 0.05,
-                        isInverted: isInverted,
+                        size: 1.0,
+                        feather: 5.0,
+                        inverted: isInverted,
                       ),
                     );
                   }
@@ -551,7 +550,7 @@ class _PipOverlaySheetState extends State<PipOverlaySheet>
             onChanged: (val) {
               if (overlay.mask != null) {
                 widget.viewModel.updateSelectedOverlayMask(
-                  overlay.mask!.copyWith(isInverted: val),
+                  overlay.mask!.copyWith(inverted: val),
                 );
               }
             },

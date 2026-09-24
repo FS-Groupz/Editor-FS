@@ -79,7 +79,7 @@ class BeatOptionsSheet extends StatelessWidget {
                     Container(
                       padding: const EdgeInsets.all(8),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFFFD600).withValues(alpha: 0.15),
+                        color: const Color(0xFFFFD600).withOpacity(0.15),
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: const Icon(Icons.graphic_eq_rounded, color: Color(0xFFFFD600), size: 20),
@@ -108,7 +108,7 @@ class BeatOptionsSheet extends StatelessWidget {
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(
                     color: beatCount > 0
-                        ? const Color(0xFFFFD600).withValues(alpha: 0.2)
+                        ? const Color(0xFFFFD600).withOpacity(0.2)
                         : AppColors.surfaceLight,
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(
@@ -312,7 +312,7 @@ class BeatOptionsSheet extends StatelessWidget {
                     children: [
                       const Row(
                         children: [
-                          Icon(Icons.magnet_rounded, size: 18, color: Color(0xFFFFD600)),
+                          Icon(Icons.adjust_rounded, size: 18, color: Color(0xFFFFD600)),
                           SizedBox(width: 8),
                           Text(
                             'Magnetic Snap to Beats',
@@ -383,7 +383,7 @@ class BeatOptionsSheet extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(6),
               decoration: BoxDecoration(
-                color: const Color(0xFFFFD600).withValues(alpha: 0.15),
+                color: const Color(0xFFFFD600).withOpacity(0.15),
                 borderRadius: BorderRadius.circular(6),
               ),
               child: Icon(icon, size: 16, color: const Color(0xFFFFD600)),

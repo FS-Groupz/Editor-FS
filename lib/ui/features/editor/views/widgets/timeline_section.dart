@@ -171,9 +171,18 @@ class _TimelineSectionState extends State<TimelineSection> {
     final screenWidth = MediaQuery.of(context).size.width;
     final halfScreenWidth = screenWidth / 2;
     final totalDuration = viewModel.totalDurationInSeconds;
-    final totalTrackWidth = totalDuration > 0.0
+    final baseTrackWidth = totalDuration > 0.0
         ? totalDuration * viewModel.pixelsPerSecond
         : 5.0 * viewModel.pixelsPerSecond;
+    double rawVideoTrackWidth = 0.0;
+    for (int i = 0; i < viewModel.videoClips.length; i++) {
+      rawVideoTrackWidth += viewModel.videoClips[i].durationInSeconds * viewModel.pixelsPerSecond;
+      if (i < viewModel.videoClips.length - 1) {
+        rawVideoTrackWidth += 40.0;
+      }
+    }
+    rawVideoTrackWidth += 60.0;
+    final totalTrackWidth = math.max(baseTrackWidth, rawVideoTrackWidth);
 
     return Container(
       width: double.infinity,
@@ -404,7 +413,7 @@ class _TimelineSectionState extends State<TimelineSection> {
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                     decoration: BoxDecoration(
                       color: viewModel.isSnapToBeatEnabled
-                          ? const Color(0xFFFFD600).withValues(alpha: 0.18)
+                          ? const Color(0xFFFFD600).withOpacity(0.18)
                           : AppColors.surfaceLight,
                       borderRadius: BorderRadius.circular(4),
                       border: Border.all(
@@ -531,9 +540,12 @@ class _TimelineSectionState extends State<TimelineSection> {
     double runningStart = 0.0;
     return SizedBox(
       height: AppDimensions.videoTrackHeight,
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        physics: const NeverScrollableScrollPhysics(),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
           ...viewModel.videoClips.asMap().entries.map((entry) {
             final idx = entry.key;
             final clip = entry.value;
@@ -638,7 +650,7 @@ class _TimelineSectionState extends State<TimelineSection> {
                                 boxShadow: [
                                   BoxShadow(
                                     color: isSelected
-                                        ? AppColors.primary.withValues(alpha: 0.5)
+                                        ? AppColors.primary.withOpacity(0.5)
                                         : Colors.black45,
                                     blurRadius: 4,
                                     offset: const Offset(0, 1),
@@ -671,7 +683,7 @@ class _TimelineSectionState extends State<TimelineSection> {
                               margin: const EdgeInsets.symmetric(horizontal: 2),
                               decoration: BoxDecoration(
                                 color: isSelected
-                                    ? AppColors.primary.withValues(alpha: 0.3)
+                                    ? AppColors.primary.withOpacity(0.3)
                                     : AppColors.surfaceElevated,
                                 borderRadius: BorderRadius.circular(4),
                                 border: Border.all(
@@ -731,6 +743,7 @@ class _TimelineSectionState extends State<TimelineSection> {
           ),
         ],
       ),
+    ),
     );
   }
 
@@ -786,7 +799,7 @@ class _TimelineSectionState extends State<TimelineSection> {
                       color: AppColors.surfaceElevated,
                       borderRadius: BorderRadius.circular(AppDimensions.radiusSm),
                       border: Border.all(
-                        color: isSelected ? AppColors.secondary : AppColors.secondary.withValues(alpha: 0.4),
+                        color: isSelected ? AppColors.secondary : AppColors.secondary.withOpacity(0.4),
                         width: isSelected ? 2.0 : 1.0,
                       ),
                     ),
@@ -886,7 +899,7 @@ class _TimelineSectionState extends State<TimelineSection> {
               child: Container(
                 clipBehavior: Clip.antiAlias,
                 decoration: BoxDecoration(
-                  color: effect.color.withValues(alpha: 0.2),
+                  color: effect.color.withOpacity(0.2),
                   borderRadius: BorderRadius.circular(AppDimensions.radiusSm),
                   border: Border.all(color: effect.color, width: 1.5),
                 ),
@@ -912,7 +925,7 @@ class _TimelineSectionState extends State<TimelineSection> {
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                       decoration: BoxDecoration(
-                        color: effect.color.withValues(alpha: 0.3),
+                        color: effect.color.withOpacity(0.3),
                         borderRadius: BorderRadius.circular(4),
                       ),
                       child: const Text(
@@ -980,7 +993,7 @@ class _TimelineSectionState extends State<TimelineSection> {
                       color: AppColors.textTrackBg,
                       borderRadius: BorderRadius.circular(AppDimensions.radiusSm),
                       border: Border.all(
-                        color: isSelected ? AppColors.accentPurple : AppColors.textTrackAccent.withValues(alpha: 0.5),
+                        color: isSelected ? AppColors.accentPurple : AppColors.textTrackAccent.withOpacity(0.5),
                         width: isSelected ? 2.0 : 1.0,
                       ),
                     ),
@@ -1112,7 +1125,7 @@ class _TimelineSectionState extends State<TimelineSection> {
                       color: AppColors.surfaceLight,
                       borderRadius: BorderRadius.circular(4),
                       border: Border.all(
-                        color: isSelected ? Colors.amber : Colors.amber.withValues(alpha: 0.5),
+                        color: isSelected ? Colors.amber : Colors.amber.withOpacity(0.5),
                         width: isSelected ? 2.0 : 1.0,
                       ),
                     ),
@@ -1222,12 +1235,12 @@ class _TimelineSectionState extends State<TimelineSection> {
                   width: math.max(20.0, viewModel.currentRecordingSeconds * viewModel.pixelsPerSecond),
                   child: Container(
                     decoration: BoxDecoration(
-                      color: Colors.red.withValues(alpha: 0.25),
+                      color: Colors.red.withOpacity(0.25),
                       borderRadius: BorderRadius.circular(4),
                       border: Border.all(color: Colors.redAccent, width: 1.5),
                       boxShadow: [
                         BoxShadow(
-                          color: Colors.redAccent.withValues(alpha: 0.4),
+                          color: Colors.redAccent.withOpacity(0.4),
                           blurRadius: 8,
                           spreadRadius: 1,
                         ),
@@ -1340,7 +1353,7 @@ class _TimelineSectionState extends State<TimelineSection> {
                   borderRadius: const BorderRadius.vertical(bottom: Radius.circular(3)),
                   boxShadow: [
                     BoxShadow(
-                      color: AppColors.primary.withValues(alpha: 0.5),
+                      color: AppColors.primary.withOpacity(0.5),
                       blurRadius: 4,
                       offset: const Offset(0, 1),
                     ),

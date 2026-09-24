@@ -35,7 +35,7 @@ void main() {
     test('parseWavBytes correctly parses synthetic 16-bit PCM WAV data', () {
       const sampleRate = 44100;
       const durationSec = 1.0;
-      const numSamples = (sampleRate * durationSec).toInt();
+      final numSamples = (sampleRate * durationSec).toInt();
       const numChannels = 1;
       const bitsPerSample = 16;
       final dataSize = numSamples * numChannels * (bitsPerSample ~/ 8);

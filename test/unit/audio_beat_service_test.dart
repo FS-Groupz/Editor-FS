@@ -83,14 +83,14 @@ void main() {
 
   group('AudioTrack Beat Properties & Serialization', () {
     test('visibleTimelineBeats handles trimming and track start time', () {
-      final track = AudioTrack(
+      const track = AudioTrack(
         id: 'track_1',
         assetId: 'asset_1',
         name: 'Test Beat Track',
-        duration: const Duration(seconds: 10),
-        startTime: const Duration(seconds: 2), // starts at 2s on timeline
-        trimStart: const Duration(seconds: 1), // starts at 1s in source
-        trimEnd: const Duration(seconds: 7),   // ends at 7s in source
+        duration: Duration(seconds: 10),
+        startTime: Duration(seconds: 2), // starts at 2s on timeline
+        trimStart: Duration(seconds: 1), // starts at 1s in source
+        trimEnd: Duration(seconds: 7),   // ends at 7s in source
         beats: [0.5, 1.5, 3.0, 5.5, 8.5],
       );
 
@@ -108,11 +108,11 @@ void main() {
     });
 
     test('AudioTrack serializes and deserializes beats and showBeats cleanly', () {
-      final original = AudioTrack(
+      const original = AudioTrack(
         id: 'track_beats_json',
         assetId: 'asset_json',
         name: 'Beats Serialization',
-        duration: const Duration(seconds: 15),
+        duration: Duration(seconds: 15),
         beats: [1.2, 2.4, 3.6, 4.8],
         showBeats: true,
       );

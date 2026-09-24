@@ -68,13 +68,13 @@ class AudioTrackItem extends StatelessWidget {
             color: AppColors.audioTrackBg,
             borderRadius: BorderRadius.circular(AppDimensions.radiusSm),
             border: Border.all(
-              color: isSelected ? AppColors.selectionBorder : AppColors.primary.withValues(alpha: 0.3),
+              color: isSelected ? AppColors.selectionBorder : AppColors.primary.withOpacity(0.3),
               width: isSelected ? 2.0 : 1.0,
             ),
             boxShadow: isSelected
                 ? [
                     BoxShadow(
-                      color: AppColors.selectionBorder.withValues(alpha: 0.3),
+                      color: AppColors.selectionBorder.withOpacity(0.3),
                       blurRadius: 6,
                     ),
                   ]
@@ -99,8 +99,8 @@ class AudioTrackItem extends StatelessWidget {
                       isMuted: audioTrack.isMuted,
                       playheadProgress: playheadProgress,
                       activeColor: AppColors.audioTrackWaveform,
-                      unplayedColor: AppColors.audioTrackWaveform.withValues(alpha: 0.55),
-                      mutedColor: AppColors.textMuted.withValues(alpha: 0.3),
+                      unplayedColor: AppColors.audioTrackWaveform.withOpacity(0.55),
+                      mutedColor: AppColors.textMuted.withOpacity(0.3),
                     ),
                   ),
                 ),
@@ -260,8 +260,8 @@ class _WaveformPainter extends CustomPainter {
   })  : trimEnd = trimEnd ?? totalDuration ?? const Duration(seconds: 30),
         totalDuration = totalDuration ?? trimEnd ?? const Duration(seconds: 30),
         activeColor = activeColor ?? color ?? AppColors.audioTrackWaveform,
-        unplayedColor = unplayedColor ?? (color ?? AppColors.audioTrackWaveform).withValues(alpha: 0.55),
-        mutedColor = mutedColor ?? AppColors.textMuted.withValues(alpha: 0.3);
+        unplayedColor = unplayedColor ?? (color ?? AppColors.audioTrackWaveform).withOpacity(0.55),
+        mutedColor = mutedColor ?? AppColors.textMuted.withOpacity(0.3);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -350,12 +350,12 @@ class _WaveformPainter extends CustomPainter {
           ..style = PaintingStyle.stroke;
 
         final beatGuidelinePaint = Paint()
-          ..color = const Color(0xFFFFD600).withValues(alpha: 0.35)
+          ..color = const Color(0xFFFFD600).withOpacity(0.35)
           ..strokeWidth = 1.0
           ..strokeCap = StrokeCap.round;
 
         final pulsePaint = Paint()
-          ..color = const Color(0xFFFFEA00).withValues(alpha: 0.6)
+          ..color = const Color(0xFFFFEA00).withOpacity(0.6)
           ..strokeWidth = 2.0
           ..style = PaintingStyle.stroke;
 

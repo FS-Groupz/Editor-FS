@@ -106,7 +106,7 @@ class _DesktopToolsPanelState extends State<DesktopToolsPanel> {
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
                     decoration: BoxDecoration(
-                      color: isSelected ? AppColors.primary.withValues(alpha: 0.2) : AppColors.surfaceLight,
+                      color: isSelected ? AppColors.primary.withOpacity(0.2) : AppColors.surfaceLight,
                       borderRadius: BorderRadius.circular(6),
                       border: Border.all(
                         color: isSelected ? AppColors.primary : AppColors.divider,

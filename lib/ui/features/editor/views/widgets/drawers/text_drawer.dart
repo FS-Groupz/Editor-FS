@@ -344,7 +344,7 @@ class TextDrawer extends StatelessWidget {
                             color: AppColors.surfaceLight,
                             borderRadius: BorderRadius.circular(AppDimensions.radiusSm),
                             border: Border.all(
-                              color: isSelected ? AppColors.accentPurple : AppColors.textTrackAccent.withValues(alpha: 0.5),
+                              color: isSelected ? AppColors.accentPurple : AppColors.textTrackAccent.withOpacity(0.5),
                               width: isSelected ? 2.0 : 1.0,
                             ),
                           ),
@@ -367,7 +367,7 @@ class TextDrawer extends StatelessWidget {
                                   margin: const EdgeInsets.only(top: 2),
                                   padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                                   decoration: BoxDecoration(
-                                    color: AppColors.primary.withValues(alpha: 0.15),
+                                    color: AppColors.primary.withOpacity(0.15),
                                     borderRadius: BorderRadius.circular(3),
                                   ),
                                   child: Text(

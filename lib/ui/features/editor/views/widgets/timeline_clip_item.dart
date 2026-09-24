@@ -6,6 +6,7 @@ import 'package:capcut_video_editor/core/constants/app_colors.dart';
 import 'package:capcut_video_editor/core/constants/app_dimensions.dart';
 import 'package:capcut_video_editor/core/services/audio_waveform_service.dart';
 import 'package:capcut_video_editor/core/utils/time_formatter.dart';
+import 'package:capcut_video_editor/domain/models/keyframe.dart';
 import 'package:capcut_video_editor/domain/models/video_clip.dart';
 
 /// Interactive CapCut timeline video clip widget with filmstrip preview,
@@ -219,8 +220,8 @@ if([T2]::E("${path.replaceAll(r'\', r'\\')}","${thumbPath.replaceAll(r'\', r'\\'
                                       border: Border(
                                         right: BorderSide(
                                           color: isSingleFrameMode
-                                              ? AppColors.primary.withValues(alpha: 0.35)
-                                              : Colors.white.withValues(alpha: 0.15),
+                                              ? AppColors.primary.withOpacity(0.35)
+                                              : Colors.white.withOpacity(0.15),
                                           width: isSingleFrameMode ? 1.0 : 0.8,
                                         ),
                                       ),
@@ -249,7 +250,7 @@ if([T2]::E("${path.replaceAll(r'\', r'\\')}","${thumbPath.replaceAll(r'\', r'\\'
                                             child: Container(
                                               padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 0.5),
                                               decoration: BoxDecoration(
-                                                color: Colors.black.withValues(alpha: 0.7),
+                                                color: Colors.black.withOpacity(0.7),
                                                 borderRadius: BorderRadius.circular(2),
                                               ),
                                               child: Text(
@@ -327,7 +328,7 @@ if([T2]::E("${path.replaceAll(r'\', r'\\')}","${thumbPath.replaceAll(r'\', r'\\'
                                   margin: const EdgeInsets.only(left: 2),
                                   padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
                                   decoration: BoxDecoration(
-                                    color: Colors.black.withValues(alpha: 0.6),
+                                    color: Colors.black.withOpacity(0.6),
                                     borderRadius: BorderRadius.circular(3),
                                   ),
                                   child: Text(
@@ -395,7 +396,7 @@ if([T2]::E("${path.replaceAll(r'\', r'\\')}","${thumbPath.replaceAll(r'\', r'\\'
                         child: Container(
                           padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1.5),
                           decoration: BoxDecoration(
-                            color: Colors.redAccent.withValues(alpha: 0.9),
+                            color: Colors.redAccent.withOpacity(0.9),
                             borderRadius: BorderRadius.circular(3),
                           ),
                           child: const Row(
@@ -539,7 +540,7 @@ if([T2]::E("${path.replaceAll(r'\', r'\\')}","${thumbPath.replaceAll(r'\', r'\\'
                           boxShadow: isKeyframeActive
                               ? [
                                   BoxShadow(
-                                    color: const Color(0xFFFFD600).withValues(alpha: 0.85),
+                                    color: const Color(0xFFFFD600).withOpacity(0.85),
                                     blurRadius: 6,
                                     spreadRadius: 2,
                                   ),
@@ -568,12 +569,12 @@ if([T2]::E("${path.replaceAll(r'\', r'\\')}","${thumbPath.replaceAll(r'\', r'\\'
 
   Widget _buildFramePlaceholder(VideoClip clip, int index) {
     return Container(
-      color: Colors.black.withValues(alpha: 0.25),
+      color: Colors.black.withOpacity(0.25),
       child: Center(
         child: Icon(
           Icons.movie_filter_outlined,
           size: 14,
-          color: Colors.white.withValues(alpha: 0.18),
+          color: Colors.white.withOpacity(0.18),
         ),
       ),
     );
@@ -605,7 +606,7 @@ class _EmbeddedAudioWaveformPainter extends CustomPainter {
 
     if (isMuted || volume <= 0.001) {
       final linePaint = Paint()
-        ..color = Colors.white.withValues(alpha: 0.15)
+        ..color = Colors.white.withOpacity(0.15)
         ..strokeWidth = 1.0;
       canvas.drawLine(Offset(0, size.height - 2), Offset(size.width, size.height - 2), linePaint);
       return;
@@ -632,7 +633,7 @@ class _EmbeddedAudioWaveformPainter extends CustomPainter {
     );
 
     final barPaint = Paint()
-      ..color = const Color(0xFF00E5FF).withValues(alpha: 0.55)
+      ..color = const Color(0xFF00E5FF).withOpacity(0.55)
       ..strokeCap = StrokeCap.round
       ..strokeWidth = barWidth;
 

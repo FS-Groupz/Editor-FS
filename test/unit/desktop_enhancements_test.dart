@@ -3,7 +3,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:capcut_video_editor/domain/models/media_asset.dart';
 import 'package:capcut_video_editor/domain/models/text_overlay.dart';
 import 'package:capcut_video_editor/domain/models/speed_curve.dart';
-import 'package:capcut_video_editor/domain/models/keyframe.dart';
 import 'package:capcut_video_editor/domain/models/video_mask.dart';
 import 'package:capcut_video_editor/domain/models/video_clip.dart';
 import 'package:capcut_video_editor/ui/features/editor/view_models/editor_view_model.dart';

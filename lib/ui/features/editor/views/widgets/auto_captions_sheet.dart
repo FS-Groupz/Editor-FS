@@ -540,7 +540,7 @@ class _AutoCaptionsSheetState extends State<AutoCaptionsSheet> with SingleTicker
                       shadows: [
                         if (_selectedAnimation == TextAnimationType.karaoke)
                           Shadow(
-                            color: preset.highlightColor.withValues(alpha: 0.8),
+                            color: preset.highlightColor.withOpacity(0.8),
                             blurRadius: 8,
                           ),
                       ],

@@ -42,7 +42,6 @@ class EditorScreen extends StatefulWidget {
 class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver {
   late final EditorViewModel _viewModel;
   final FocusNode _keyboardFocusNode = FocusNode();
-  final GlobalKey<VideoPreviewSectionState> _previewKey = GlobalKey<VideoPreviewSectionState>();
 
   @override
   void initState() {
@@ -91,15 +90,7 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
       return KeyEventResult.ignored;
     }
 
-    // ESC → exit fullscreen if active (highest priority shortcut)
-    if (event.logicalKey == LogicalKeyboardKey.escape) {
-      final previewState = _previewKey.currentState;
-      if (previewState != null && previewState.isFullScreen) {
-        previewState.exitFullScreen();
-        return KeyEventResult.handled;
-      }
-    }
-
+    // Shortcut handling
     final isCtrl = HardwareKeyboard.instance.isControlPressed || HardwareKeyboard.instance.isMetaPressed;
     final isShift = HardwareKeyboard.instance.isShiftPressed;
 
@@ -279,7 +270,10 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
                           // 2. Video Preview Screen at top (Flexible/Responsive)
                           Expanded(
                             flex: 5,
-                            child: VideoPreviewSection(key: _previewKey, viewModel: _viewModel),
+                            child: VideoPreviewSection(
+                              key: const ValueKey('mobile_video_preview'),
+                              viewModel: _viewModel,
+                            ),
                           ),
 
                           // 3. Action Toolbar in between (Split, Trim, Delete, Export)
@@ -334,7 +328,10 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
 
                               // Center Panel: Video Viewport Canvas
                               Expanded(
-                                child: VideoPreviewSection(key: _previewKey, viewModel: _viewModel),
+                                child: VideoPreviewSection(
+                                  key: const ValueKey('desktop_video_preview'),
+                                  viewModel: _viewModel,
+                                ),
                               ),
 
                               // Right Panel: Tools & Category Drawers Inspector

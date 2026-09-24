@@ -1,9 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:capcut_video_editor/domain/models/keyframe.dart';
-import 'package:capcut_video_editor/domain/models/video_clip.dart';
 import 'package:capcut_video_editor/domain/models/overlay_clip.dart';
 import 'package:capcut_video_editor/ui/features/editor/view_models/editor_view_model.dart';
-import 'package:flutter/material.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -210,8 +208,8 @@ void main() {
       final overlay = OverlayClip(
         id: 'overlay_1',
         title: 'PIP Test',
-        startTime: Duration(seconds: 0),
-        duration: Duration(seconds: 5),
+        startTime: const Duration(seconds: 0),
+        duration: const Duration(seconds: 5),
         keyframes: [
           Keyframe(
             id: 'okf1',

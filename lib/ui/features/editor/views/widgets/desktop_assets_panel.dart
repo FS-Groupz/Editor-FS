@@ -216,7 +216,7 @@ class _DesktopAssetsPanelState extends State<DesktopAssetsPanel> {
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 6),
           decoration: BoxDecoration(
-            color: isSelected ? AppColors.primary.withValues(alpha: 0.18) : AppColors.surfaceLight,
+            color: isSelected ? AppColors.primary.withOpacity(0.18) : AppColors.surfaceLight,
             borderRadius: BorderRadius.circular(6),
             border: Border.all(
               color: isSelected ? AppColors.primary : Colors.transparent,
@@ -285,7 +285,7 @@ class _DesktopAssetsPanelState extends State<DesktopAssetsPanel> {
                       child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
                         decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.75),
+                          color: Colors.black.withOpacity(0.75),
                           borderRadius: BorderRadius.circular(3),
                         ),
                         child: Text(

@@ -398,7 +398,7 @@ class _SpeedAdjustmentSheetState extends State<SpeedAdjustmentSheet> with Single
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                   decoration: BoxDecoration(
-                    color: isSelected ? AppColors.primary.withValues(alpha: 0.2) : AppColors.surfaceLight,
+                    color: isSelected ? AppColors.primary.withOpacity(0.2) : AppColors.surfaceLight,
                     borderRadius: BorderRadius.circular(6),
                     border: Border.all(
                       color: isSelected ? AppColors.primary : AppColors.divider,
@@ -590,7 +590,7 @@ class _SpeedAdjustmentSheetState extends State<SpeedAdjustmentSheet> with Single
         color: AppColors.surfaceElevated,
         borderRadius: BorderRadius.circular(10),
         border: Border.all(
-          color: value ? AppColors.primary.withValues(alpha: 0.3) : AppColors.divider,
+          color: value ? AppColors.primary.withOpacity(0.3) : AppColors.divider,
           width: 1,
         ),
       ),
@@ -617,7 +617,7 @@ class _SpeedAdjustmentSheetState extends State<SpeedAdjustmentSheet> with Single
           Switch(
             value: value,
             activeColor: AppColors.primary,
-            activeTrackColor: AppColors.primary.withValues(alpha: 0.3),
+            activeTrackColor: AppColors.primary.withOpacity(0.3),
             inactiveThumbColor: AppColors.textMuted,
             inactiveTrackColor: AppColors.surfaceLight,
             onChanged: onChanged,
@@ -729,11 +729,11 @@ class _CurveGraphPainter extends CustomPainter {
     final h = size.height;
 
     final gridPaint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.06)
+      ..color = Colors.white.withOpacity(0.06)
       ..strokeWidth = 1.0;
 
     final baseLinePaint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.25)
+      ..color = Colors.white.withOpacity(0.25)
       ..strokeWidth = 1.2
       ..style = PaintingStyle.stroke;
 
@@ -785,8 +785,8 @@ class _CurveGraphPainter extends CustomPainter {
         begin: Alignment.topCenter,
         end: Alignment.bottomCenter,
         colors: [
-          AppColors.primary.withValues(alpha: 0.35),
-          AppColors.primary.withValues(alpha: 0.02),
+          AppColors.primary.withOpacity(0.35),
+          AppColors.primary.withOpacity(0.02),
         ],
       ).createShader(Rect.fromLTWH(0, 0, w, h));
     canvas.drawPath(fillPath, fillPaint);
@@ -812,7 +812,7 @@ class _CurveGraphPainter extends CustomPainter {
 
       if (isSelected) {
         final glowPaint = Paint()
-          ..color = AppColors.primary.withValues(alpha: 0.4)
+          ..color = AppColors.primary.withOpacity(0.4)
           ..style = PaintingStyle.fill;
         canvas.drawCircle(pt, 12, glowPaint);
       }

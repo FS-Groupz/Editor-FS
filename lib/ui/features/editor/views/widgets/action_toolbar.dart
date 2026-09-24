@@ -25,6 +25,9 @@ class ActionToolbar extends StatelessWidget {
     final hasSelectedText = viewModel.selectedTextId != null;
     final hasSelectedOverlay = viewModel.selectedOverlay != null;
     final hasAnySelection = hasSelectedClip || hasSelectedAudio || hasSelectedText || hasSelectedOverlay;
+    final canKeyframe = hasSelectedClip || hasSelectedOverlay;
+    final isAtKeyframe = canKeyframe && viewModel.hasKeyframeAtPlayhead;
+    final kfCount = canKeyframe ? viewModel.currentKeyframeCount : 0;
 
     return Container(
       height: AppDimensions.actionToolbarHeight,
@@ -407,16 +410,12 @@ class ActionToolbar extends StatelessWidget {
                 ),
 
                 // CapCut-style Keyframe Control Group (⯇  ◆+ / ◆-  ⯈)
-                final canKeyframe = hasSelectedClip || hasSelectedOverlay;
-                final isAtKeyframe = canKeyframe && viewModel.hasKeyframeAtPlayhead;
-                final kfCount = canKeyframe ? viewModel.currentKeyframeCount : 0;
-
                 Container(
                   margin: const EdgeInsets.symmetric(horizontal: 2.0, vertical: 2.0),
                   padding: const EdgeInsets.symmetric(horizontal: 4.0, vertical: 2.0),
                   decoration: BoxDecoration(
                     color: isAtKeyframe
-                        ? const Color(0xFFFFD600).withValues(alpha: 0.15)
+                        ? const Color(0xFFFFD600).withOpacity(0.15)
                         : (kfCount > 0 ? AppColors.surfaceLight : Colors.transparent),
                     borderRadius: BorderRadius.circular(AppDimensions.radiusSm),
                     border: Border.all(
@@ -658,7 +657,7 @@ class ActionToolbar extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: viewModel.isPlaying ? AppColors.secondary.withValues(alpha: 0.2) : AppColors.surfaceElevated,
+            color: viewModel.isPlaying ? AppColors.secondary.withOpacity(0.2) : AppColors.surfaceElevated,
             shape: BoxShape.circle,
             border: Border.all(
               color: viewModel.isPlaying ? AppColors.secondary : AppColors.divider,
@@ -692,11 +691,11 @@ class ActionToolbar extends StatelessWidget {
     if (isPrimary && enabled) {
       iconColor = AppColors.primary;
       textColor = AppColors.primary;
-      bgColor = AppColors.primary.withValues(alpha: 0.12);
+      bgColor = AppColors.primary.withOpacity(0.12);
     } else if (isAccent && enabled) {
       iconColor = AppColors.secondary;
       textColor = AppColors.secondary;
-      bgColor = AppColors.secondary.withValues(alpha: 0.12);
+      bgColor = AppColors.secondary.withOpacity(0.12);
     }
 
     return Tooltip(
@@ -712,7 +711,7 @@ class ActionToolbar extends StatelessWidget {
             decoration: BoxDecoration(
               color: bgColor ?? Colors.transparent,
               borderRadius: BorderRadius.circular(AppDimensions.radiusSm),
-              border: isPrimary && enabled ? Border.all(color: AppColors.primary.withValues(alpha: 0.4)) : null,
+              border: isPrimary && enabled ? Border.all(color: AppColors.primary.withOpacity(0.4)) : null,
             ),
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,

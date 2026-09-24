@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:capcut_video_editor/core/constants/app_colors.dart';
 import 'package:capcut_video_editor/core/constants/app_dimensions.dart';
@@ -313,9 +312,9 @@ class _AudioDrawerState extends State<AudioDrawer> with SingleTickerProviderStat
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                     decoration: BoxDecoration(
-                      color: AppColors.secondary.withValues(alpha: 0.12),
+                      color: AppColors.secondary.withOpacity(0.12),
                       borderRadius: BorderRadius.circular(AppDimensions.radiusSm),
-                      border: Border.all(color: AppColors.secondary.withValues(alpha: 0.4)),
+                      border: Border.all(color: AppColors.secondary.withOpacity(0.4)),
                     ),
                     child: const Row(
                       mainAxisAlignment: MainAxisAlignment.center,
@@ -371,7 +370,7 @@ class _AudioDrawerState extends State<AudioDrawer> with SingleTickerProviderStat
                               child: Column(
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
-                                  Icon(Icons.music_off_rounded, color: AppColors.textMuted.withValues(alpha: 0.6), size: 28),
+                                  Icon(Icons.music_off_rounded, color: AppColors.textMuted.withOpacity(0.6), size: 28),
                                   const SizedBox(height: 6),
                                   const Text(
                                     'No music tracks yet',
@@ -402,7 +401,7 @@ class _AudioDrawerState extends State<AudioDrawer> with SingleTickerProviderStat
                                 decoration: BoxDecoration(
                                   color: AppColors.surfaceElevated,
                                   borderRadius: BorderRadius.circular(AppDimensions.radiusSm),
-                                  border: Border.all(color: AppColors.secondary.withValues(alpha: 0.5), width: 1.2),
+                                  border: Border.all(color: AppColors.secondary.withOpacity(0.5), width: 1.2),
                                 ),
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -413,7 +412,7 @@ class _AudioDrawerState extends State<AudioDrawer> with SingleTickerProviderStat
                                         Container(
                                           padding: const EdgeInsets.all(4),
                                           decoration: BoxDecoration(
-                                            color: AppColors.secondary.withValues(alpha: 0.2),
+                                            color: AppColors.secondary.withOpacity(0.2),
                                             borderRadius: BorderRadius.circular(4),
                                           ),
                                           child: const Icon(Icons.music_note_rounded, color: AppColors.secondary, size: 14),
@@ -476,7 +475,7 @@ class _AudioDrawerState extends State<AudioDrawer> with SingleTickerProviderStat
                                 shape: BoxShape.circle,
                                 boxShadow: [
                                   BoxShadow(
-                                    color: (widget.viewModel.isRecordingVoice ? AppColors.error : AppColors.secondary).withValues(alpha: 0.4),
+                                    color: (widget.viewModel.isRecordingVoice ? AppColors.error : AppColors.secondary).withOpacity(0.4),
                                     blurRadius: 12,
                                     spreadRadius: 2,
                                   ),
@@ -573,7 +572,7 @@ class _AudioDrawerState extends State<AudioDrawer> with SingleTickerProviderStat
                       height: 28,
                       padding: const EdgeInsets.symmetric(horizontal: 8),
                       decoration: BoxDecoration(
-                        color: onlyDownloaded ? AppColors.primary.withValues(alpha: 0.2) : AppColors.surfaceLight,
+                        color: onlyDownloaded ? AppColors.primary.withOpacity(0.2) : AppColors.surfaceLight,
                         borderRadius: BorderRadius.circular(6),
                         border: Border.all(
                           color: onlyDownloaded ? AppColors.primary : AppColors.divider,
@@ -663,7 +662,7 @@ class _AudioDrawerState extends State<AudioDrawer> with SingleTickerProviderStat
                           child: Column(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              Icon(Icons.search_off_rounded, color: AppColors.textMuted.withValues(alpha: 0.5), size: 24),
+                              Icon(Icons.search_off_rounded, color: AppColors.textMuted.withOpacity(0.5), size: 24),
                               const SizedBox(height: 4),
                               Text(
                                 onlyDownloaded ? 'No downloaded sound effects yet' : 'No sound effects found',
@@ -717,7 +716,7 @@ class _AudioDrawerState extends State<AudioDrawer> with SingleTickerProviderStat
         color: AppColors.surfaceLight,
         borderRadius: BorderRadius.circular(AppDimensions.radiusSm),
         border: Border.all(
-          color: asset.isDownloaded ? AppColors.primary.withValues(alpha: 0.5) : AppColors.divider,
+          color: asset.isDownloaded ? AppColors.primary.withOpacity(0.5) : AppColors.divider,
           width: asset.isDownloaded ? 1.0 : 0.8,
         ),
       ),
@@ -732,7 +731,7 @@ class _AudioDrawerState extends State<AudioDrawer> with SingleTickerProviderStat
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                 decoration: BoxDecoration(
-                  color: AppColors.secondary.withValues(alpha: 0.15),
+                  color: AppColors.secondary.withOpacity(0.15),
                   borderRadius: BorderRadius.circular(3),
                 ),
                 child: Text(

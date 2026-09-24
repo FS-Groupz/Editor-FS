@@ -39,8 +39,8 @@ class InteractiveTransformCanvas extends StatelessWidget {
       clip: clip,
       isSelected: isSelected,
       viewModel: viewModel,
-      child: child,
       overrideTransform: overrideTransform,
+      child: child,
     );
     if (!hasScope) {
       return ProviderScope(child: content);
@@ -368,7 +368,7 @@ class _InteractiveTransformCanvasContentState extends ConsumerState<_Interactive
                               border: Border.all(color: Colors.white, width: 1.5),
                               boxShadow: [
                                 BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.5),
+                                  color: Colors.black.withOpacity(0.5),
                                   blurRadius: 4,
                                   offset: const Offset(0, 1),
                                 ),
@@ -424,7 +424,7 @@ class TransformAlignmentGuidesPainter extends CustomPainter {
     final centerY = size.height / 2.0;
 
     final glowPaint = Paint()
-      ..color = const Color(0xFF00E5FF).withValues(alpha: 0.35)
+      ..color = const Color(0xFF00E5FF).withOpacity(0.35)
       ..strokeWidth = 3.0
       ..style = PaintingStyle.stroke;
 

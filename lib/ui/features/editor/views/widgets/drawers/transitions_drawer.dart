@@ -194,7 +194,7 @@ class _TransitionsDrawerState extends State<TransitionsDrawer> {
         width: widget.isDesktop ? 88 : null,
         padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
         decoration: BoxDecoration(
-          color: isSelected ? AppColors.primary.withValues(alpha: 0.15) : AppColors.surfaceLight,
+          color: isSelected ? AppColors.primary.withOpacity(0.15) : AppColors.surfaceLight,
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
             color: isSelected ? AppColors.primary : AppColors.divider,
