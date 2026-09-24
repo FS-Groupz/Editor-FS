@@ -130,7 +130,13 @@ class VideoPreviewSectionState extends State<VideoPreviewSection> {
       activeClip is VideoClip ? activeClip.durationInSeconds : 1000.0,
     );
     final sourceOffsetSec = (activeClip is VideoClip)
-        ? (activeClip.trimStart.inMilliseconds / 1000.0) + (deltaInClipSec * activeClip.speed)
+        ? (activeClip.speedCurve != null
+            ? (activeClip.trimStart.inMilliseconds / 1000.0) +
+                ((activeClip.trimEnd - activeClip.trimStart).inMilliseconds / 1000.0) *
+                    activeClip.speedCurve!.getSourceProgressAt(
+                      (deltaInClipSec / math.max(0.001, activeClip.durationInSeconds)).clamp(0.0, 1.0),
+                    )
+            : (activeClip.trimStart.inMilliseconds / 1000.0) + (deltaInClipSec * activeClip.speed))
         : deltaInClipSec;
     final sourceOffsetMs = (sourceOffsetSec * 1000).round();
 
@@ -151,7 +157,12 @@ class VideoPreviewSectionState extends State<VideoPreviewSection> {
             });
             if (session != null && activeClip is VideoClip) {
               VideoPlaybackService.instance.setVolume(session.textureId, activeClip.effectiveVolume);
-              VideoPlaybackService.instance.setSpeed(session.textureId, activeClip.speed);
+              final initialSpeed = activeClip.speedCurve != null
+                  ? activeClip.speedCurve!.evaluateSpeedAt(
+                      (deltaInClipSec / math.max(0.001, activeClip.durationInSeconds)).clamp(0.0, 1.0),
+                    )
+                  : activeClip.speed;
+              VideoPlaybackService.instance.setSpeed(session.textureId, initialSpeed);
               if (widget.viewModel.isPlaying) {
                 debugPrint('[AUTO_PLAY_TRACE] VideoPreviewSection calling play because viewModel.isPlaying is TRUE (pos=${sourceOffsetMs}ms)');
                 VideoPlaybackService.instance.play(session.textureId, position: Duration(milliseconds: sourceOffsetMs));

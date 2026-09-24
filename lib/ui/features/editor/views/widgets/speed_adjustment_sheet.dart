@@ -18,7 +18,8 @@ class _SpeedPresetOption {
 }
 
 /// Modal sheet offering both Normal Constant Speed (0.1x to 100x)
-/// and Graphic Curve Speed Adjustment with prebuilt presets and custom 2D curve editing.
+/// and Graphic Curve Speed Adjustment with prebuilt presets, custom 2D curve editing,
+/// Pitch Preservation and Optical-Flow Smooth Slow-Mo.
 class SpeedAdjustmentSheet extends StatefulWidget {
   final EditorViewModel viewModel;
 
@@ -51,6 +52,10 @@ class _SpeedAdjustmentSheetState extends State<SpeedAdjustmentSheet> with Single
   List<SpeedCurvePoint> _curvePoints = [];
   int? _selectedPointIndex;
 
+  // Advanced toggles
+  bool _keepPitch = true;
+  bool _smoothSlowMo = true;
+
   @override
   void initState() {
     super.initState();
@@ -60,6 +65,8 @@ class _SpeedAdjustmentSheetState extends State<SpeedAdjustmentSheet> with Single
       if (clip.speedCurve != null) {
         _selectedPreset = clip.speedCurve!.type;
         _curvePoints = List.from(clip.speedCurve!.points);
+        _keepPitch = clip.speedCurve!.keepPitch;
+        _smoothSlowMo = clip.speedCurve!.smoothSlowMo;
       } else {
         _selectedPreset = SpeedCurvePresetType.none;
         _curvePoints = List.from(SpeedCurve.montage().points);
@@ -103,6 +110,9 @@ class _SpeedAdjustmentSheetState extends State<SpeedAdjustmentSheet> with Single
         case SpeedCurvePresetType.flashOut:
           _curvePoints = List.from(SpeedCurve.flashOut().points);
           break;
+        case SpeedCurvePresetType.bubbly:
+          _curvePoints = List.from(SpeedCurve.bubbly().points);
+          break;
         case SpeedCurvePresetType.custom:
           if (_curvePoints.isEmpty) {
             _curvePoints = List.from(SpeedCurve.custom().points);
@@ -115,7 +125,12 @@ class _SpeedAdjustmentSheetState extends State<SpeedAdjustmentSheet> with Single
   void _onApply() {
     final isCurveTab = _tabController.index == 1;
     if (isCurveTab && _selectedPreset != SpeedCurvePresetType.none && _curvePoints.isNotEmpty) {
-      final curve = SpeedCurve(type: _selectedPreset, points: _curvePoints);
+      final curve = SpeedCurve(
+        type: _selectedPreset,
+        points: _curvePoints,
+        keepPitch: _keepPitch,
+        smoothSlowMo: _smoothSlowMo,
+      );
       widget.viewModel.setClipSpeedCurve(curve);
     } else {
       widget.viewModel.setClipSpeed(_normalSpeed);
@@ -129,6 +144,8 @@ class _SpeedAdjustmentSheetState extends State<SpeedAdjustmentSheet> with Single
       _selectedPreset = SpeedCurvePresetType.none;
       _curvePoints = List.from(SpeedCurve.montage().points);
       _selectedPointIndex = null;
+      _keepPitch = true;
+      _smoothSlowMo = true;
     });
     widget.viewModel.setClipSpeed(1.0);
     Navigator.of(context).pop();
@@ -143,7 +160,7 @@ class _SpeedAdjustmentSheetState extends State<SpeedAdjustmentSheet> with Single
 
     return Container(
       constraints: BoxConstraints(
-        maxHeight: MediaQuery.of(context).size.height * 0.85,
+        maxHeight: MediaQuery.of(context).size.height * 0.88,
       ),
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
       child: Column(
@@ -318,13 +335,38 @@ class _SpeedAdjustmentSheetState extends State<SpeedAdjustmentSheet> with Single
               );
             }).toList(),
           ),
+          const SizedBox(height: 16),
+
+          // Audio pitch preservation toggle
+          _buildToggleOption(
+            icon: Icons.record_voice_over_rounded,
+            title: 'Pitch Preservation',
+            subtitle: 'Retain natural voice pitch without chipmunk distortion',
+            value: _keepPitch,
+            onChanged: (val) => setState(() => _keepPitch = val),
+          ),
+          if (_normalSpeed < 1.0) ...[
+            const SizedBox(height: 8),
+            _buildToggleOption(
+              icon: Icons.auto_awesome_rounded,
+              title: 'Smooth Slow-Mo',
+              subtitle: 'Simulate optical flow frame blending for buttery slow motion',
+              value: _smoothSlowMo,
+              onChanged: (val) => setState(() => _smoothSlowMo = val),
+            ),
+          ],
         ],
       ),
     );
   }
 
   Widget _buildCurveSpeedTab(double originalTrimSec) {
-    final tempCurve = SpeedCurve(type: _selectedPreset, points: _curvePoints);
+    final tempCurve = SpeedCurve(
+      type: _selectedPreset,
+      points: _curvePoints,
+      keepPitch: _keepPitch,
+      smoothSlowMo: _smoothSlowMo,
+    );
     final avgSpeed = tempCurve.averageSpeed;
     final effectiveSec = originalTrimSec / avgSpeed;
 
@@ -336,6 +378,7 @@ class _SpeedAdjustmentSheetState extends State<SpeedAdjustmentSheet> with Single
       _SpeedPresetOption(type: SpeedCurvePresetType.jumpCut, label: 'Jump Cut', icon: Icons.content_cut_rounded),
       _SpeedPresetOption(type: SpeedCurvePresetType.flashIn, label: 'Flash In', icon: Icons.keyboard_double_arrow_right_rounded),
       _SpeedPresetOption(type: SpeedCurvePresetType.flashOut, label: 'Flash Out', icon: Icons.keyboard_double_arrow_left_rounded),
+      _SpeedPresetOption(type: SpeedCurvePresetType.bubbly, label: 'Bubbly', icon: Icons.bubble_chart_rounded),
       _SpeedPresetOption(type: SpeedCurvePresetType.custom, label: 'Custom', icon: Icons.tune_rounded),
     ];
 
@@ -460,12 +503,125 @@ class _SpeedAdjustmentSheetState extends State<SpeedAdjustmentSheet> with Single
                   ),
               ],
             ),
+            const SizedBox(height: 6),
+            // Quick speed values for selected point
+            Row(
+              children: [
+                const Text('Snap:', style: TextStyle(fontSize: 10, color: AppColors.textMuted)),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [0.2, 0.5, 1.0, 2.0, 3.5, 5.0].map((spd) {
+                        final isCurr = (_curvePoints[_selectedPointIndex!].speedMultiplier - spd).abs() < 0.05;
+                        return Padding(
+                          padding: const EdgeInsets.only(right: 6),
+                          child: InkWell(
+                            onTap: () {
+                              setState(() {
+                                _selectedPreset = SpeedCurvePresetType.custom;
+                                _curvePoints[_selectedPointIndex!] =
+                                    _curvePoints[_selectedPointIndex!].copyWith(speedMultiplier: spd);
+                              });
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: isCurr ? AppColors.primary : AppColors.surfaceLight,
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                '${spd}x',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                  color: isCurr ? Colors.black : Colors.white,
+                                ),
+                              ),
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ] else ...[
             const Text(
               'Drag points to adjust speed curve. Tap empty space to add point.',
               style: TextStyle(fontSize: 10, color: AppColors.textMuted, fontStyle: FontStyle.italic),
             ),
           ],
+          const SizedBox(height: 12),
+
+          // Toggles: Pitch Preservation & Smooth Slow-Mo
+          _buildToggleOption(
+            icon: Icons.record_voice_over_rounded,
+            title: 'Pitch Preservation',
+            subtitle: 'Retain natural voice pitch without chipmunk distortion',
+            value: _keepPitch,
+            onChanged: (val) => setState(() => _keepPitch = val),
+          ),
+          const SizedBox(height: 8),
+          _buildToggleOption(
+            icon: Icons.auto_awesome_rounded,
+            title: 'Smooth Slow-Mo',
+            subtitle: 'Simulate optical flow frame blending for buttery slow motion',
+            value: _smoothSlowMo,
+            onChanged: (val) => setState(() => _smoothSlowMo = val),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildToggleOption({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required bool value,
+    required ValueChanged<bool> onChanged,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceElevated,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: value ? AppColors.primary.withValues(alpha: 0.3) : AppColors.divider,
+          width: 1,
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 20, color: value ? AppColors.primary : AppColors.textSecondary),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
+                ),
+                Text(
+                  subtitle,
+                  style: const TextStyle(fontSize: 10, color: AppColors.textMuted),
+                ),
+              ],
+            ),
+          ),
+          Switch(
+            value: value,
+            activeColor: AppColors.primary,
+            activeTrackColor: AppColors.primary.withValues(alpha: 0.3),
+            inactiveThumbColor: AppColors.textMuted,
+            inactiveTrackColor: AppColors.surfaceLight,
+            onChanged: onChanged,
+          ),
         ],
       ),
     );
@@ -521,32 +677,31 @@ class _CurveCanvas extends StatelessWidget {
               }
             }
 
-            final newTimeRatio = ((tapPos.dx - 12) / (w - 24)).clamp(0.02, 0.98);
-            final newSpeed = _yToSpeed(tapPos.dy, h);
-            onAddPoint(SpeedCurvePoint(
-              timeRatio: (newTimeRatio * 100).round() / 100.0,
-              speedMultiplier: (newSpeed * 10).round() / 10.0,
-            ));
+            final tRatio = ((tapPos.dx - 12) / (w - 24)).clamp(0.0, 1.0);
+            final speed = _yToSpeed(tapPos.dy, h);
+            onAddPoint(SpeedCurvePoint(timeRatio: tRatio, speedMultiplier: speed));
           },
           onPanUpdate: (details) {
             if (selectedPointIndex == null || selectedPointIndex! >= points.length) return;
             final idx = selectedPointIndex!;
-            final currentPt = points[idx];
+            final isEdge = (idx == 0 || idx == points.length - 1);
 
-            double newTimeRatio = currentPt.timeRatio;
-            if (idx != 0 && idx != points.length - 1) {
+            final newX = details.localPosition.dx;
+            final newY = details.localPosition.dy;
+
+            final newSpeed = _yToSpeed(newY, h);
+
+            double newTRatio = points[idx].timeRatio;
+            if (!isEdge) {
               final minT = points[idx - 1].timeRatio + 0.02;
               final maxT = points[idx + 1].timeRatio - 0.02;
-              newTimeRatio = ((details.localPosition.dx - 12) / (w - 24)).clamp(minT, maxT);
+              final rawTRatio = ((newX - 12) / (w - 24)).clamp(0.0, 1.0);
+              newTRatio = rawTRatio.clamp(minT, maxT);
             }
 
-            final newSpeed = _yToSpeed(details.localPosition.dy, h);
             onUpdatePoint(
               idx,
-              SpeedCurvePoint(
-                timeRatio: (newTimeRatio * 100).round() / 100.0,
-                speedMultiplier: (newSpeed * 10).round() / 10.0,
-              ),
+              SpeedCurvePoint(timeRatio: newTRatio, speedMultiplier: newSpeed),
             );
           },
           child: CustomPaint(

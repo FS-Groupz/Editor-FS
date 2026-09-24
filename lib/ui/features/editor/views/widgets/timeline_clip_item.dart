@@ -345,23 +345,42 @@ if([T2]::E("${path.replaceAll(r'\', r'\\')}","${thumbPath.replaceAll(r'\', r'\\'
                       ),
                     ),
 
-                    // Bottom-Right: Speed Badge if != 1.0
-                    if ((widget.clip.speed - 1.0).abs() > 0.05)
+                    // Bottom-Right: Speed Badge if != 1.0 or SpeedCurve is active
+                    if (widget.clip.speedCurve != null || (widget.clip.speed - 1.0).abs() > 0.05)
                       Positioned(
                         bottom: 4,
                         right: widget.isSelected ? AppDimensions.trimHandleWidth + 4 : 6,
                         child: LayoutBuilder(
                           builder: (context, constraints) {
                             if (clipWidth < 40) return const SizedBox.shrink();
+                            final isCurve = widget.clip.speedCurve != null;
+                            final badgeText = isCurve
+                                ? (clipWidth < 70
+                                    ? 'Curve'
+                                    : '~${widget.clip.speedCurve!.averageSpeed.toStringAsFixed(1)}x Curve')
+                                : '${widget.clip.speed.toStringAsFixed(1)}x';
                             return Container(
                               padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                               decoration: BoxDecoration(
-                                color: AppColors.primary,
+                                color: isCurve ? const Color(0xFF6C5CE7) : AppColors.primary,
                                 borderRadius: BorderRadius.circular(3),
                               ),
-                              child: Text(
-                                '${widget.clip.speed.toStringAsFixed(1)}x',
-                                style: const TextStyle(fontSize: 8.5, fontWeight: FontWeight.bold, color: Colors.black),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  if (isCurve) ...[
+                                    const Icon(Icons.show_chart_rounded, size: 9, color: Colors.white),
+                                    const SizedBox(width: 2),
+                                  ],
+                                  Text(
+                                    badgeText,
+                                    style: TextStyle(
+                                      fontSize: 8.5,
+                                      fontWeight: FontWeight.bold,
+                                      color: isCurve ? Colors.white : Colors.black,
+                                    ),
+                                  ),
+                                ],
                               ),
                             );
                           },
@@ -413,7 +432,8 @@ if([T2]::E("${path.replaceAll(r'\', r'\\')}","${thumbPath.replaceAll(r'\', r'\\'
                   behavior: HitTestBehavior.opaque,
                   onHorizontalDragUpdate: (details) {
                     final deltaSeconds = details.delta.dx / widget.pixelsPerSecond;
-                    final deltaMs = (deltaSeconds * widget.clip.speed * 1000).round();
+                    final effectiveSpeed = widget.clip.speedCurve?.averageSpeed ?? widget.clip.speed;
+                    final deltaMs = (deltaSeconds * effectiveSpeed * 1000).round();
                     final proposedTrimStartMs = widget.clip.trimStart.inMilliseconds + deltaMs;
 
                     if (proposedTrimStartMs >= 0 &&
@@ -454,7 +474,8 @@ if([T2]::E("${path.replaceAll(r'\', r'\\')}","${thumbPath.replaceAll(r'\', r'\\'
                   behavior: HitTestBehavior.opaque,
                   onHorizontalDragUpdate: (details) {
                     final deltaSeconds = details.delta.dx / widget.pixelsPerSecond;
-                    final deltaMs = (deltaSeconds * widget.clip.speed * 1000).round();
+                    final effectiveSpeed = widget.clip.speedCurve?.averageSpeed ?? widget.clip.speed;
+                    final deltaMs = (deltaSeconds * effectiveSpeed * 1000).round();
                     final proposedTrimEndMs = widget.clip.trimEnd.inMilliseconds + deltaMs;
 
                     if (proposedTrimEndMs <= widget.clip.originalDuration.inMilliseconds &&
