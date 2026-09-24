@@ -17,7 +17,8 @@ class TimelineRuler extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final effectiveDuration = (totalDurationSeconds < 5.0) ? 10.0 : totalDurationSeconds + 5.0;
+    // When project has clips, ruler matches exact media duration. For empty project, default to 5.0s placeholder.
+    final effectiveDuration = (totalDurationSeconds <= 0.0) ? 5.0 : totalDurationSeconds;
     final totalWidth = effectiveDuration * pixelsPerSecond;
 
     return Container(
@@ -80,9 +81,9 @@ class _TimelineRulerPainter extends CustomPainter {
       isFrameMode = true;
     }
 
-    final totalSeconds = totalDuration.ceil();
-    for (double sec = 0; sec <= totalSeconds; sec += majorInterval) {
+    for (double sec = 0; sec <= totalDuration + 1e-4; sec += majorInterval) {
       final x = sec * pixelsPerSecond;
+      if (x > size.width + 1.0) break;
 
       // Draw Major Tick
       canvas.drawLine(
@@ -112,13 +113,15 @@ class _TimelineRulerPainter extends CustomPainter {
       final subInterval = majorInterval / subDivisions;
       for (int i = 1; i < subDivisions; i++) {
         final subSec = sec + (i * subInterval);
-        final subX = subSec * pixelsPerSecond;
-        if (subX <= size.width) {
-          canvas.drawLine(
-            Offset(subX, size.height - (isFrameMode ? 6 : 5)),
-            Offset(subX, size.height),
-            subTickPaint,
-          );
+        if (subSec <= totalDuration + 1e-4) {
+          final subX = subSec * pixelsPerSecond;
+          if (subX <= size.width) {
+            canvas.drawLine(
+              Offset(subX, size.height - (isFrameMode ? 6 : 5)),
+              Offset(subX, size.height),
+              subTickPaint,
+            );
+          }
         }
       }
     }

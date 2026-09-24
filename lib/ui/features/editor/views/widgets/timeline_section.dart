@@ -170,8 +170,10 @@ class _TimelineSectionState extends State<TimelineSection> {
     final viewModel = widget.viewModel;
     final screenWidth = MediaQuery.of(context).size.width;
     final halfScreenWidth = screenWidth / 2;
-    final totalDuration = math.max(viewModel.totalDurationInSeconds, 1.0);
-    final totalTrackWidth = (totalDuration + 5.0) * viewModel.pixelsPerSecond;
+    final totalDuration = viewModel.totalDurationInSeconds;
+    final totalTrackWidth = totalDuration > 0.0
+        ? totalDuration * viewModel.pixelsPerSecond
+        : 5.0 * viewModel.pixelsPerSecond;
 
     return Container(
       width: double.infinity,
@@ -258,7 +260,8 @@ class _TimelineSectionState extends State<TimelineSection> {
                           viewModel.pause();
                         }
                       } else if (notification is ScrollUpdateNotification && _isUserScrollingHorizontal) {
-                        final newPlayhead = _horizontalScrollController.offset / viewModel.pixelsPerSecond;
+                        final newPlayhead = (_horizontalScrollController.offset / viewModel.pixelsPerSecond)
+                            .clamp(0.0, viewModel.totalDurationInSeconds);
                         viewModel.seekTo(newPlayhead);
                       } else if (notification is ScrollEndNotification) {
                         _isUserScrollingHorizontal = false;
@@ -287,7 +290,7 @@ class _TimelineSectionState extends State<TimelineSection> {
                           }
                         },
                         child: SizedBox(
-                          width: math.max(totalTrackWidth, screenWidth),
+                          width: math.max(totalTrackWidth, 1.0),
                           child: SingleChildScrollView(
                           controller: _verticalScrollController,
                           scrollDirection: Axis.vertical,
@@ -801,8 +804,7 @@ class _TimelineSectionState extends State<TimelineSection> {
 
   Widget _buildEffectsTrack(EditorViewModel viewModel, double totalTrackWidth) {
     final effect = viewModel.activeEffect;
-    final totalDuration = math.max(viewModel.totalDurationInSeconds, 5.0);
-    final width = math.max(totalDuration * viewModel.pixelsPerSecond, 160.0);
+    final width = totalTrackWidth;
 
     return Container(
       width: totalTrackWidth,
